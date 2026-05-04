@@ -127,14 +127,25 @@ async def analyze_and_convert(request: AnalyzeRequest):
         )
         
         # 6. Phase 4: Composition & Fix Loop
+        # Extract business_context from prod_enriched (product understanding output)
+        _prod_dump = prod_enriched if isinstance(prod_enriched, dict) else {}
+        biz_ctx = _prod_dump.get("business_context", _prod_dump.get("product", _prod_dump))
+        feat_list = enriched_feats if isinstance(enriched_feats, list) else []
+        fr_list = fr_gen.model_dump().get("functional_requirements", [])
+        nfr_list = nfr_gen.model_dump().get("non_functional_requirements", [])
+
         initial_markdown = compose_brd(
-            product_data=prod_enriched,
-            features_data={"validated_features": enriched_feats},
-            fr_data=fr_gen.model_dump(),
-            nfr_data=nfr_gen.model_dump()
+            business_context=biz_ctx,
+            features=feat_list,
+            functional_requirements=fr_list,
+            non_functional_requirements=nfr_list,
         )
         
-        loop_result = run_fix_loop(initial_markdown)
+        loop_result = run_fix_loop(
+            initial_markdown,
+            features=feat_list,
+            functional_requirements=fr_list,
+        )
         final_markdown = loop_result["final_markdown"]
         
         # 7. Build MinimalBRD for structural response
@@ -318,11 +329,16 @@ async def compose_brd_endpoint(request: ComposeBRDRequest):
     """
     from app.analysis.brd_composer import compose_brd
     try:
+        _prod = request.product_data
+        biz_ctx = _prod.get("business_context", _prod.get("product", _prod))
+        feat_list = request.features_data.get("validated_features", request.features_data.get("features", []))
+        fr_list = request.fr_data.get("functional_requirements", [])
+        nfr_list = request.nfr_data.get("non_functional_requirements", [])
         markdown_str = compose_brd(
-            product_data=request.product_data,
-            features_data=request.features_data,
-            fr_data=request.fr_data,
-            nfr_data=request.nfr_data
+            business_context=biz_ctx,
+            features=feat_list,
+            functional_requirements=fr_list,
+            non_functional_requirements=nfr_list,
         )
         return {"status": "success", "data": markdown_str}
     except Exception as e:
@@ -345,7 +361,7 @@ async def validate_brd_endpoint(request: ValidateBRDRequest):
     """
     from app.analysis.brd_validator import validate_brd
     try:
-        result = validate_brd(request.brd_markdown)
+        result = validate_brd(request.brd_markdown, [], [])
         return {"status": "success", "data": result.model_dump()}
     except Exception as e:
         traceback.print_exc()
