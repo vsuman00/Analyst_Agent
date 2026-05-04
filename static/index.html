@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analyst Agent | Enterprise BRD Pipeline</title>
+    <!-- Tailwind CSS via CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            200: '#bae6fd',
+                            300: '#7dd3fc',
+                            400: '#38bdf8',
+                            500: '#0ea5e9',
+                            600: '#0284c7',
+                            700: '#0369a1',
+                            800: '#075985',
+                            900: '#0c4a6e',
+                            950: '#082f49',
+                        }
+                    },
+                    animation: {
+                        'slow-pan': 'pan 20s linear infinite',
+                        'float': 'float 6s ease-in-out infinite',
+                    },
+                    keyframes: {
+                        pan: {
+                            '0%, 100%': { backgroundPosition: '0% 50%' },
+                            '50%': { backgroundPosition: '100% 50%' },
+                        },
+                        float: {
+                            '0%, 100%': { transform: 'translateY(0)' },
+                            '50%': { transform: 'translateY(-10px)' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <!-- Marked.js for Markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #020617;
+            color: #f8fafc;
+            overflow-x: hidden;
+        }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .glass {
+            background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.8);
+        }
+        .gradient-bg {
+            background: linear-gradient(-45deg, #020617, #0f172a, #1e1b4b, #020617);
+            background-size: 400% 400%;
+            animation: pan 15s ease infinite;
+        }
+        .step-active { color: #38bdf8; border-color: #38bdf8; }
+        .step-complete { color: #10b981; border-color: #10b981; }
+        .step-pending { color: #475569; border-color: #334155; }
+        
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+        .markdown-content h1 { font-size: 1.875rem; font-weight: 700; margin-top: 1.5rem; margin-bottom: 1rem; color: #f1f5f9; border-bottom: 1px solid #334155; padding-bottom: 0.5rem; }
+        .markdown-content h2 { font-size: 1.5rem; font-weight: 600; margin-top: 1.25rem; margin-bottom: 0.75rem; color: #e2e8f0; }
+        .markdown-content h3 { font-size: 1.25rem; font-weight: 600; margin-top: 1rem; margin-bottom: 0.5rem; color: #cbd5e1; }
+        .markdown-content p { margin-bottom: 1rem; line-height: 1.625; color: #94a3b8; }
+        .markdown-content ul { list-style-type: disc; margin-left: 1.5rem; margin-bottom: 1rem; color: #94a3b8; }
+        .markdown-content table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; font-size: 0.875rem; }
+        .markdown-content th { background: #1e293b; color: #f1f5f9; text-align: left; padding: 0.75rem; border: 1px solid #334155; }
+        .markdown-content td { padding: 0.75rem; border: 1px solid #334155; color: #94a3b8; }
+        .markdown-content code { font-family: 'JetBrains Mono', monospace; background: #1e293b; padding: 0.2rem 0.4rem; border-radius: 0.25rem; font-size: 0.875rem; color: #38bdf8; }
+    </style>
+</head>
+<body class="min-h-screen gradient-bg flex flex-col p-6 items-center">
+
+    <!-- Decorative blobs -->
+    <div class="fixed top-0 left-0 w-full h-full overflow-hidden pointer-events-none -z-10">
+        <div class="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-blue-900/10 blur-[120px] animate-float"></div>
+        <div class="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-indigo-900/10 blur-[120px]" style="animation: float 8s ease-in-out infinite reverse"></div>
+    </div>
+
+    <!-- Header Section -->
+    <header class="w-full max-w-6xl mb-12 text-center flex flex-col items-center">
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-semibold mb-4 tracking-wider uppercase">
+            <span class="relative flex h-2 w-2">
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                <span class="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+            </span>
+            Enterprise Grade Pipeline
+        </div>
+        <h1 class="text-5xl md:text-7xl font-bold tracking-tight text-white mb-6 drop-shadow-2xl">
+            Analyst <span class="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-sky-400 to-indigo-400">Agent</span>
+        </h1>
+        <p class="text-slate-400 text-lg md:text-xl max-w-2xl font-light leading-relaxed">
+            Harness the power of deterministic repository analysis and optional LLM enrichment to generate production-ready Business Requirement Documents.
+        </p>
+    </header>
+
+    <main class="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+        
+        <!-- Left Panel: Controls & Progress -->
+        <div class="lg:col-span-5 space-y-8">
+            
+            <!-- Repo Form -->
+            <div class="glass rounded-3xl p-8 transition-all hover:border-white/20">
+                <h3 class="text-lg font-semibold text-white mb-6 flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-400"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>
+                    New Analysis
+                </h3>
+                <form id="pipeline-form" class="space-y-6">
+                    <div class="space-y-2">
+                        <label class="text-sm font-medium text-slate-400 ml-1">GitHub Repository URL</label>
+                        <input type="url" id="repo-url" required
+                            placeholder="https://github.com/username/repository"
+                            class="w-full px-5 py-4 bg-slate-900/50 border border-slate-700 rounded-2xl text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all shadow-inner"
+                        >
+                    </div>
+                    <button type="submit" id="submit-btn" class="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-2xl transition-all flex items-center justify-center gap-3 shadow-lg shadow-blue-900/20 active:scale-[0.98]">
+                        <span id="btn-text">Initiate Pipeline</span>
+                        <svg id="btn-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                        <div id="btn-loader" class="hidden animate-spin h-5 w-5 border-2 border-white/30 border-t-white rounded-full"></div>
+                    </button>
+                </form>
+            </div>
+
+            <!-- Pipeline Status -->
+            <div id="status-card" class="hidden glass rounded-3xl p-8 space-y-6">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-lg font-semibold text-white">Pipeline Execution</h3>
+                    <span id="overall-status" class="text-xs font-mono text-blue-400 uppercase tracking-widest animate-pulse">Running</span>
+                </div>
+                
+                <div class="space-y-4" id="progress-steps">
+                    <!-- Steps will be dynamically rendered here -->
+                    <div class="flex items-center gap-4 group" data-step="1">
+                        <div class="w-8 h-8 rounded-full border-2 flex items-center justify-center text-xs font-bold step-pending transition-colors">1</div>
+                        <div class="flex-1">
+                            <p class="text-sm font-medium text-slate-300">Phase 1: Repository Ingestion</p>
+                            <p class="text-[10px] text-slate-500 uppercase tracking-tight">RepoScanner | FileClassifier</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-4 group" data-step="2">
+                        <div class="w-8 h-8 rounded-full border-2 flex items-center justify-center text-xs font-bold step-pending transition-colors">2</div>
+                        <div class="flex-1">
+                            <p class="text-sm font-medium text-slate-300">Phase 2: Feature Extraction</p>
+                            <p class="text-[10px] text-slate-500 uppercase tracking-tight">Analysis Agents | Validator</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-4 group" data-step="3">
+                        <div class="w-8 h-8 rounded-full border-2 flex items-center justify-center text-xs font-bold step-pending transition-colors">3</div>
+                        <div class="flex-1">
+                            <p class="text-sm font-medium text-slate-300">Phase 3: Requirements Generation</p>
+                            <p class="text-[10px] text-slate-500 uppercase tracking-tight">Functional | Non-Functional</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-4 group" data-step="4">
+                        <div class="w-8 h-8 rounded-full border-2 flex items-center justify-center text-xs font-bold step-pending transition-colors">4</div>
+                        <div class="flex-1">
+                            <p class="text-sm font-medium text-slate-300">Phase 4: LLM Enrichment</p>
+                            <p class="text-[10px] text-slate-500 uppercase tracking-tight">Optional OpenAI Refinement</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-4 group" data-step="5">
+                        <div class="w-8 h-8 rounded-full border-2 flex items-center justify-center text-xs font-bold step-pending transition-colors">5</div>
+                        <div class="flex-1">
+                            <p class="text-sm font-medium text-slate-300">Phase 5: Document Composition</p>
+                            <p class="text-[10px] text-slate-500 uppercase tracking-tight">Composer | Validator | FixLoop</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pt-4">
+                    <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                        <div id="progress-bar" class="bg-blue-500 h-full w-0 transition-all duration-700 ease-out"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Logs -->
+            <div id="logs-card" class="hidden glass rounded-3xl p-6 h-48 overflow-hidden flex flex-col">
+                <p class="text-xs font-mono text-slate-500 mb-2 uppercase tracking-widest">Live Output</p>
+                <div id="log-console" class="flex-1 overflow-y-auto mono text-[10px] text-slate-400 space-y-1">
+                    <div class="text-blue-500">Initializing core systems...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Panel: Result Display -->
+        <div class="lg:col-span-7 space-y-8">
+            
+            <!-- Empty State / Placeholder -->
+            <div id="result-placeholder" class="glass rounded-[2rem] p-12 h-full flex flex-col items-center justify-center text-center space-y-6">
+                <div class="w-20 h-20 bg-slate-800/50 rounded-3xl flex items-center justify-center text-slate-700">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
+                </div>
+                <div>
+                    <h4 class="text-xl font-medium text-slate-200">No Active Analysis</h4>
+                    <p class="text-slate-500 max-w-sm mt-2">Enter a repository URL to begin the automated documentation pipeline.</p>
+                </div>
+            </div>
+
+            <!-- Real Results Section -->
+            <div id="result-content" class="hidden space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-1000">
+                
+                <!-- Metrics Bar -->
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div class="glass p-4 rounded-2xl text-center">
+                        <p class="text-[10px] uppercase tracking-widest text-slate-500 mb-1">Features</p>
+                        <p id="stat-features" class="text-2xl font-bold text-white">0</p>
+                    </div>
+                    <div class="glass p-4 rounded-2xl text-center">
+                        <p class="text-[10px] uppercase tracking-widest text-slate-500 mb-1">Requirements</p>
+                        <p id="stat-reqs" class="text-2xl font-bold text-white">0</p>
+                    </div>
+                    <div class="glass p-4 rounded-2xl text-center border-emerald-500/10">
+                        <p class="text-[10px] uppercase tracking-widest text-slate-500 mb-1">Confidence</p>
+                        <p id="stat-confidence" class="text-2xl font-bold text-emerald-400">0%</p>
+                    </div>
+                    <div class="glass p-4 rounded-2xl text-center border-blue-500/10">
+                        <p class="text-[10px] uppercase tracking-widest text-slate-500 mb-1">Score</p>
+                        <p id="stat-score" class="text-2xl font-bold text-blue-400">0.00</p>
+                    </div>
+                </div>
+
+                <!-- Markdown Preview -->
+                <div class="glass rounded-[2rem] overflow-hidden flex flex-col h-[600px]">
+                    <div class="px-8 py-4 bg-white/5 border-b border-white/5 flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                            <span class="w-3 h-3 rounded-full bg-red-500/50"></span>
+                            <span class="w-3 h-3 rounded-full bg-amber-500/50"></span>
+                            <span class="w-3 h-3 rounded-full bg-emerald-500/50"></span>
+                            <span class="ml-2 text-xs font-mono text-slate-400">BRD_PREVIEW.md</span>
+                        </div>
+                        <div class="flex items-center gap-4">
+                            <button id="dl-md" class="text-xs text-blue-400 hover:text-blue-300 transition-colors font-medium">Download Markdown</button>
+                            <button id="dl-docx" class="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white transition-all">Export DOCX</button>
+                        </div>
+                    </div>
+                    <div id="markdown-viewer" class="flex-1 p-10 overflow-y-auto markdown-content bg-slate-950/20">
+                        <!-- Rendered Markdown goes here -->
+                    </div>
+                </div>
+
+                <!-- Footer Downloads -->
+                <div class="flex items-center justify-between px-2">
+                    <div class="flex items-center gap-4">
+                         <button id="dl-json" class="flex items-center gap-2 text-xs text-slate-500 hover:text-slate-300 transition-colors">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+                            Download Raw JSON Payload
+                         </button>
+                    </div>
+                    <p class="text-[10px] text-slate-600 font-mono">HASH: <span id="run-hash">N/A</span></p>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const form = document.getElementById('pipeline-form');
+        const submitBtn = document.getElementById('submit-btn');
+        const btnText = document.getElementById('btn-text');
+        const btnLoader = document.getElementById('btn-loader');
+        const btnIcon = document.getElementById('btn-icon');
+        
+        const statusCard = document.getElementById('status-card');
+        const logsCard = document.getElementById('logs-card');
+        const logConsole = document.getElementById('log-console');
+        const progressBar = document.getElementById('progress-bar');
+        
+        const resultPlaceholder = document.getElementById('result-placeholder');
+        const resultContent = document.getElementById('result-content');
+        const markdownViewer = document.getElementById('markdown-viewer');
+
+        let currentResult = null;
+
+        function addLog(msg, type = 'info') {
+            const div = document.createElement('div');
+            const color = type === 'error' ? 'text-red-500' : (type === 'success' ? 'text-emerald-500' : 'text-slate-400');
+            div.className = color;
+            div.innerHTML = `<span class="text-slate-600 mr-2">[${new Date().toLocaleTimeString()}]</span> ${msg}`;
+            logConsole.appendChild(div);
+            logConsole.scrollTop = logConsole.scrollHeight;
+        }
+
+        function setStep(stepNum, status) {
+            const stepEl = document.querySelector(`[data-step="${stepNum}"]`);
+            if (!stepEl) return;
+            const circle = stepEl.querySelector('div');
+            
+            if (status === 'active') {
+                circle.className = 'w-8 h-8 rounded-full border-2 flex items-center justify-center text-xs font-bold step-active animate-pulse';
+                progressBar.style.width = `${(stepNum - 1) * 20 + 10}%`;
+            } else if (status === 'complete') {
+                circle.className = 'w-8 h-8 rounded-full border-2 flex items-center justify-center text-xs font-bold step-complete bg-emerald-500/10';
+                circle.innerHTML = '✓';
+                progressBar.style.width = `${stepNum * 20}%`;
+            } else {
+                circle.className = 'w-8 h-8 rounded-full border-2 flex items-center justify-center text-xs font-bold step-pending';
+            }
+        }
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const url = document.getElementById('repo-url').value;
+            if (!url) return;
+
+            // UI Reset
+            submitBtn.disabled = true;
+            btnText.textContent = "Processing...";
+            btnIcon.classList.add('hidden');
+            btnLoader.classList.remove('hidden');
+            
+            statusCard.classList.remove('hidden');
+            logsCard.classList.remove('hidden');
+            resultPlaceholder.classList.add('hidden');
+            resultContent.classList.add('hidden');
+            logConsole.innerHTML = '';
+            
+            // Reset steps
+            [1,2,3,4,5].forEach(i => setStep(i, 'pending'));
+            
+            addLog(`Starting analysis for <b>${url}</b>`);
+            
+            // Simulation of deterministic steps for UX
+            setStep(1, 'active');
+            addLog("Cloning repository...");
+            
+            try {
+                const response = await fetch('/analyze-and-convert', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ repo_url: url })
+                });
+
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.detail || "Pipeline failed");
+                }
+
+                // Simulate progress for a few seconds if it returns too fast
+                await new Promise(r => setTimeout(r, 800));
+                setStep(1, 'complete');
+                setStep(2, 'active');
+                addLog("File classification and chunking successful.");
+                
+                await new Promise(r => setTimeout(r, 800));
+                setStep(2, 'complete');
+                setStep(3, 'active');
+                addLog("Analysis agents identifying core features...");
+
+                const data = await response.json();
+                currentResult = data;
+
+                await new Promise(r => setTimeout(r, 800));
+                setStep(3, 'complete');
+                setStep(4, 'active');
+                addLog("Applying LLM enrichment layer (optional)...");
+
+                await new Promise(r => setTimeout(r, 800));
+                setStep(4, 'complete');
+                setStep(5, 'active');
+                addLog("Finalizing BRD with FixLoop...");
+                
+                await new Promise(r => setTimeout(r, 500));
+                setStep(5, 'complete');
+                
+                addLog("Analysis complete!", 'success');
+                renderResults(data);
+
+            } catch (err) {
+                addLog(err.message, 'error');
+                document.getElementById('overall-status').textContent = 'FAILED';
+                document.getElementById('overall-status').className = 'text-xs font-mono text-red-500 uppercase tracking-widest';
+            } finally {
+                submitBtn.disabled = false;
+                btnText.textContent = "Analyze Another Repo";
+                btnIcon.classList.remove('hidden');
+                btnLoader.classList.add('hidden');
+            }
+        });
+
+        function renderResults(data) {
+            resultContent.classList.remove('hidden');
+            
+            // Fill stats
+            document.getElementById('stat-features').textContent = data.brd.features.length;
+            document.getElementById('stat-reqs').textContent = data.brd.requirements.length;
+            document.getElementById('stat-score').textContent = data.validation.score.toFixed(2);
+            
+            const avgConfidence = data.brd.features.reduce((acc, f) => acc + f.confidence, 0) / (data.brd.features.length || 1);
+            document.getElementById('stat-confidence').textContent = `${(avgConfidence * 100).toFixed(0)}%`;
+            
+            document.getElementById('run-hash').textContent = Math.random().toString(16).slice(2, 10).toUpperCase();
+
+            // Render Markdown
+            markdownViewer.innerHTML = marked.parse(data.markdown);
+        }
+
+        // --- Download Handlers ---
+
+        async function downloadFile(endpoint, body, filename, defaultExt) {
+            try {
+                addLog(`Preparing ${filename}...`);
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                
+                if (!response.ok) throw new Error("Download failed");
+                
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename.includes('.') ? filename : `${filename}${defaultExt}`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(url);
+                addLog(`Downloaded ${filename} successfully.`, 'success');
+            } catch (err) {
+                addLog(`Download failed: ${err.message}`, 'error');
+            }
+        }
+
+        document.getElementById('dl-md').onclick = () => {
+            if (!currentResult) return;
+            downloadFile('/download/brd-markdown', { 
+                brd_markdown: currentResult.markdown,
+                filename: `BRD_${currentResult.brd.repo_name}`
+            }, `BRD_${currentResult.brd.repo_name}.md`, '.md');
+        };
+
+        document.getElementById('dl-docx').onclick = () => {
+            if (!currentResult) return;
+            downloadFile('/download/brd-docx', { 
+                brd_markdown: currentResult.markdown,
+                filename: `BRD_${currentResult.brd.repo_name}`
+            }, `BRD_${currentResult.brd.repo_name}.docx`, '.docx');
+        };
+
+        document.getElementById('dl-json').onclick = () => {
+            if (!currentResult) return;
+            downloadFile('/download/pipeline-json', currentResult.pipeline, `Analysis_${currentResult.brd.repo_name}.json`, '.json');
+        };
+
+    </script>
+</body>
+</html>
