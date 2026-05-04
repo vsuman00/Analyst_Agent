@@ -71,7 +71,12 @@ def _apply_fixes(markdown: str, issues: list[str]) -> str:
     
     return fixed.strip()
 
-def run_fix_loop(initial_markdown: str, max_iterations: int = 2) -> Dict[str, Any]:
+def run_fix_loop(
+    initial_markdown: str,
+    max_iterations: int = 2,
+    features: list = None,
+    functional_requirements: list = None,
+) -> Dict[str, Any]:
     """
     Run the validation/fix loop.
     Returns:
@@ -81,12 +86,14 @@ def run_fix_loop(initial_markdown: str, max_iterations: int = 2) -> Dict[str, An
         "iterations": int
       }
     """
+    features = features or []
+    functional_requirements = functional_requirements or []
     current_markdown = initial_markdown
     iteration = 0
-    
+
     while iteration < max_iterations:
-        val_result = validate_brd(current_markdown)
-        
+        val_result = validate_brd(current_markdown, features, functional_requirements)
+
         if not val_result.needs_revision:
             # Score >= 0.85, we are good
             return {
@@ -94,13 +101,13 @@ def run_fix_loop(initial_markdown: str, max_iterations: int = 2) -> Dict[str, An
                 "final_validation": val_result.model_dump(),
                 "iterations": iteration
             }
-            
+
         # Needs revision -> apply deterministic fixes
         current_markdown = _apply_fixes(current_markdown, val_result.issues)
         iteration += 1
 
     # Max iterations reached, return current state
-    final_val = validate_brd(current_markdown)
+    final_val = validate_brd(current_markdown, features, functional_requirements)
     return {
         "final_markdown": current_markdown,
         "final_validation": final_val.model_dump(),
