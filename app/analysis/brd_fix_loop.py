@@ -56,15 +56,17 @@ def _apply_fixes(markdown: str, issues: list[str]) -> str:
             pattern = re.compile(r'\b' + re.escape(word) + r'\b[\s\-]*', re.IGNORECASE)
             fixed = pattern.sub('', fixed)
             
-    # 3. Fix missing sections (if they were somehow deleted, inject empty ones to satisfy the structural contract)
-    if "Missing '## 1. Product Overview' section." in issues and "## 1. Product Overview" not in fixed:
-        fixed += "\n## 1. Product Overview\n*Content missing*\n"
-    if "Missing '## 2. Core Features' section." in issues and "## 2. Core Features" not in fixed:
-        fixed += "\n## 2. Core Features\n*Content missing*\n"
-    if "Missing '## 3. Functional Requirements' section." in issues and "## 3. Functional Requirements" not in fixed:
-        fixed += "\n## 3. Functional Requirements\n*Content missing*\n"
-    if "Missing '## 4. Non-Functional Requirements' section." in issues and "## 4. Non-Functional Requirements" not in fixed:
-        fixed += "\n## 4. Non-Functional Requirements\n*Content missing*\n"
+    # 3. Fix missing sections — aligned to new 16-section structure
+    new_sections = [
+        "## 2. Business Context", "## 3. Current State Analysis",
+        "## 4. Stakeholders", "## 5. Functional Requirements",
+        "## 6. Non-Functional Requirements", "## 7. Data Requirements",
+        "## 11. Risk Register", "## 13. Acceptance Criteria",
+    ]
+    for heading in new_sections:
+        label = heading.replace("## ", "")
+        if heading not in fixed:
+            fixed += f"\n{heading}\n*{label} — content pending.*\n"
 
     # Clean up double empty lines caused by replacements
     fixed = re.sub(r'\n{3,}', '\n\n', fixed)

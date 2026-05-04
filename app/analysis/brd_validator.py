@@ -46,13 +46,21 @@ from app.schemas.models import BRDValidationResult
 
 REQUIRED_SECTIONS = [
     "## 1. Executive Summary",
-    "## 2. Product Overview",
-    "## 3. Stakeholders",
-    "## 4. Feature Breakdown",
+    "## 2. Business Context",
+    "## 3. Current State Analysis",
+    "## 4. Stakeholders",
     "## 5. Functional Requirements",
     "## 6. Non-Functional Requirements",
-    "## 7. Assumptions",
-    "## 8. Risks",
+    "## 7. Data Requirements",
+    "## 8. Technology Stack",
+    "## 9. CI/CD Pipeline",
+    "## 10. Infrastructure",
+    "## 11. Risk Register",
+    "## 12. Compliance",
+    "## 13. Acceptance Criteria",
+    "## 14. Delivery Roadmap",
+    "## 15. Open Issues",
+    "## 16. Document Approval",
 ]
 
 BANNED_PHRASES = [
