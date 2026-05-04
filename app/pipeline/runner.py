@@ -21,6 +21,7 @@ from app.context.normalizer import normalize_context
 from app.analysis.feature_extraction_agent import extract_features
 from app.analysis.feature_validator import validate_features
 from app.analysis.product_understanding_agent import understand_product
+from app.analysis.business_understanding_agent import understand_business
 from app.analysis.functional_requirement_generator import generate_requirements
 from app.analysis.non_functional_requirement_generator import generate_nfrs
 
@@ -116,7 +117,6 @@ def run_end_to_end(repo_url: str, output_dir: str):
 
         log_stage("9", "NonFunctionalRequirementGenerator")
         system_type = prod_dict['product']['name']
-        # Try to extract tech stack from chunks if possible, or just pass empty list for now
         nfr_result = generate_nfrs(system_type=system_type, tech_stack=[])
         nfr_dict = nfr_result.model_dump()
         log_stage("9", "NonFunctionalRequirementGenerator", f"SUCCESS ({len(nfr_dict['non_functional_requirements'])} NFRs)")
@@ -127,13 +127,27 @@ def run_end_to_end(repo_url: str, output_dir: str):
         )
         val_feats["validated_features"] = enriched_feat_list
 
+        # ─── PHASE 3.6: BUSINESS UNDERSTANDING ─────────────────────────────
+        # FIX (Bug 1.3): Call BusinessUnderstandingAgent explicitly so
+        # compose_brd() receives product_type, primary_users, core_value.
+        biz_result = understand_business(
+            val_feats["validated_features"],
+            system_type=prod_dict['product']['name']
+        )
+        biz_ctx = biz_result.model_dump()["business_context"]
+        # Merge product summary into business context for Executive Summary richness
+        biz_ctx["product_summary"] = prod_dict["product"].get("summary", "")
+        biz_ctx["core_capabilities"] = prod_dict["product"].get("core_capabilities", [])
+        biz_ctx["repo_name"] = scan_data.get("repo_name", "Unknown Repository")
+
         # ─── PHASE 4: COMPOSITION & VALIDATION ───────────────────────────────
         log_stage("10", "BRDComposer & FixLoop")
+        # FIX (Bug 1.1): Pass correct keyword argument names matching compose_brd() signature.
         initial_markdown = compose_brd(
-            product_data=prod_dict,
-            features_data=val_feats,
-            fr_data=fr_dict,
-            nfr_data=nfr_dict
+            business_context=biz_ctx,
+            features=val_feats["validated_features"],
+            functional_requirements=fr_dict["functional_requirements"],
+            non_functional_requirements=nfr_dict["non_functional_requirements"],
         )
         
         loop_result = run_fix_loop(initial_markdown, max_iterations=2)
