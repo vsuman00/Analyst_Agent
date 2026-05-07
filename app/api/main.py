@@ -79,97 +79,46 @@ async def convert_payload(request: ConvertRequest):
 @app.post("/analyze-and-convert")
 async def analyze_and_convert(request: AnalyzeRequest):
     """
-    End-to-end: Full 10-stage pipeline execution.
+    End-to-end: Full 5-phase LLM BRD pipeline.
+
+    Phase 1 — Context Extraction (scan, classify, chunk)
+    Phase 2 — Feature Analysis (extract, validate, understand)
+    Phase 3 — Requirement Generation (FR + NFR)
+    Phase 4 — Technical Signals (deps, entities, endpoints, defects → Evidence Bundle)
+    Phase 5 — LLM BRD Composition + Validation (16 grounded LLM calls)
+
     Returns:
-      - pipeline: raw canonical payload
-      - brd: structured MinimalBRD object
-      - markdown: final formatted & fixed BRD markdown
+      markdown    : Final BRD in Markdown format
+      validation  : Structural + semantic validation scores
+      evidence    : The Evidence Bundle used as LLM context
+      brd         : MinimalBRD structured object
     """
-    from app.pipeline.runner import run_pipeline
+    from app.pipeline.runner import run_full_brd_pipeline
     from app.analysis.payload_converter import build_brd
-    from app.analysis.feature_extraction_agent import extract_features
-    from app.analysis.feature_validator import validate_features
-    from app.analysis.product_understanding_agent import understand_product
-    from app.analysis.business_understanding_agent import understand_business
-    from app.analysis.functional_requirement_generator import generate_requirements
-    from app.analysis.non_functional_requirement_generator import generate_nfrs
-    from app.analysis.brd_composer import compose_brd
-    from app.analysis.brd_fix_loop import run_fix_loop
-    import os
 
     try:
-        # 1. Phase 1: Context Extraction
-        final_payload = run_pipeline(
+        result = run_full_brd_pipeline(
             repo_url=request.repo_url,
             output_path=request.output_path,
         )
 
-        # 2. Extract components for full analysis
-        # FIX (Bug 1.2): final_output_builder.py stores key as "modules" not "normalized_modules"
-        norm_modules = final_payload.get("modules", final_payload.get("normalized_modules", []))
-        chunks = final_payload.get("chunks", [])
-
-        # 3. Phase 2: Analysis
-        feat_ext = extract_features(norm_modules, chunks)
-        val_feats = validate_features(feat_ext.model_dump()["features"])
-        val_feats_list = val_feats.model_dump()["validated_features"]
-        prod_und = understand_product(val_feats_list)
-        prod_dict = prod_und.model_dump()
-
-        # 4. Phase 3: Requirements
-        fr_gen = generate_requirements(val_feats_list)
-        tech_stack = final_payload.get("tech_stack", [])
-        system_type = prod_dict["product"]["name"]
-        nfr_gen = generate_nfrs(system_type=system_type, tech_stack=tech_stack)
-
-        # 5. Optional LLM Enrichment
-        from app.pipeline.runner import _try_enrich
-        enriched_feats, prod_enriched = _try_enrich(val_feats_list, prod_dict)
-
-        # FIX (Bug 1.3): Call BusinessUnderstandingAgent explicitly so compose_brd()
-        # receives real product_type, primary_users, core_value — not fallback strings.
-        biz_result = understand_business(
-            enriched_feats,
-            system_type=prod_dict["product"]["name"]
-        )
-        biz_ctx = biz_result.model_dump()["business_context"]
-        # Augment with product-level summary fields
-        biz_ctx["product_summary"] = prod_dict["product"].get("summary", "")
-        biz_ctx["core_capabilities"] = prod_dict["product"].get("core_capabilities", [])
-        biz_ctx["repo_name"] = final_payload.get("repo_name", request.repo_url.rstrip("/").rsplit("/", 1)[-1])
-
-        feat_list = enriched_feats if isinstance(enriched_feats, list) else []
-        fr_list = fr_gen.model_dump().get("functional_requirements", [])
-        nfr_list = nfr_gen.model_dump().get("non_functional_requirements", [])
-
-        # 6. Phase 4: Composition & Fix Loop
-        initial_markdown = compose_brd(
-            business_context=biz_ctx,
-            features=feat_list,
-            functional_requirements=fr_list,
-            non_functional_requirements=nfr_list,
-        )
-
-        loop_result = run_fix_loop(
-            initial_markdown,
-            features=feat_list,
-            functional_requirements=fr_list,
-        )
-        final_markdown = loop_result["final_markdown"]
-
-        # 7. Build MinimalBRD for structural response
-        brd_struct = build_brd(final_payload)
+        # Build MinimalBRD from the raw payload for backwards compatibility
+        brd_struct = build_brd(result["final_payload"])
 
         return {
-            "status": "success",
-            "pipeline": final_payload,
-            "brd": brd_struct.model_dump(),
-            "markdown": final_markdown,
-            "validation": loop_result["final_validation"]
+            "status":     "success",
+            "markdown":   result["markdown"],
+            "validation": result["validation"],
+            "evidence":   result["evidence_bundle"],
+            "pipeline":   result["final_payload"],
+            "brd":        brd_struct.model_dump(),
         }
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Full pipeline execution failed: {str(e)}")
+
+
+
 
 
 

@@ -1,3 +1,4 @@
+
 # Analyst-Agent Technical Overview
 
 This document provides a comprehensive overview of the Analyst-Agent's architecture, the deterministic data extraction pipeline, and the core functions of its components.

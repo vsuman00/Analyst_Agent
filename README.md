@@ -43,12 +43,23 @@ CREATED → INGESTING → ECA_DONE → CONTEXT_READY → NORMALIZED → VALIDATE
 ```bash
 # Create a virtual environment
 python -m venv .venv
+```
 
-# Activate it
-source .venv/bin/activate       # macOS / Linux
-# .venv\Scripts\activate        # Windows
+**Activate the virtual environment:**
 
-# Install all dependencies
+- **macOS / Linux:**
+  ```bash
+  source .venv/bin/activate
+  ```
+
+- **Windows:**
+  ```powershell
+  .\.venv\Scripts\activate
+  ```
+
+**Install dependencies:**
+
+```bash
 pip install -r requirements.txt
 ```
 
@@ -72,7 +83,8 @@ OPENAI_MAX_TOKENS=2048           # Optional, default: 2048
 ### 4. Running the Application
 
 ```bash
-uvicorn app.api.main:app --reload
+# Ensure your virtual environment is activated, then run:
+python -m uvicorn app.api.main:app --reload
 ```
 
 The API is available at `http://localhost:8000`.  

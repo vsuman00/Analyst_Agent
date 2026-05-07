@@ -1,226 +1,332 @@
 """
-run_full_pipeline.py — Master Orchestration Script
-----------------------------------------------------
-Executes the full deterministic 4-phase pipeline on a target repository
-and outputs the finalized, validated Business Requirement Document (BRD).
+runner.py — Master Pipeline Orchestrator
+-----------------------------------------
+Executes the full 5-phase BRD generation pipeline:
+
+  Phase 1 — Context Extraction
+    RepoScanner → FileClassifier → ContentProcessor → ContextAggregator → Normalizer
+
+  Phase 2 — Feature Analysis
+    FeatureExtractionAgent → FeatureValidator → ProductUnderstandingAgent → BusinessUnderstandingAgent
+
+  Phase 3 — Requirement Generation
+    FunctionalRequirementGenerator → NonFunctionalRequirementGenerator
+
+  Phase 4 — Technical Signal Extraction (new extractors)
+    DependencyExtractor → EntityExtractor → ApiExtractor → DefectExtractor → EvidenceBundle
+
+  Phase 5 — LLM BRD Composition & Validation
+    LLMBRDComposer (16 grounded LLM calls) → LLMBRDValidator → Final BRD
+
+Design decisions:
+  - Each phase logs start/complete with duration via StageTimer.
+  - Phase 4 extractors are optional: failure is logged but never crashes the pipeline.
+  - Phase 5 LLM composer falls back to deterministic mode if OPENAI_API_KEY is missing.
+  - All print() replaced with structured logger calls.
+  - run_pipeline() (called by the API) and run_end_to_end() (CLI) share the same core logic.
 """
+from __future__ import annotations
 
 import sys
 import json
 import argparse
+import os
 from pathlib import Path
+from typing import Any, Dict, List
 
-# Phase 1: Context Extraction
-from app.eca.repo_scanner import scan_repository
-from app.eca.file_classifier import run_classifier
+# ── Logging (must come first) ──────────────────────────────────────────────
+from app.utils.logger import get_logger, StageTimer, log
+
+logger = get_logger(__name__)
+
+# ── Phase 1: Context Extraction ────────────────────────────────────────────
+from app.eca.repo_scanner      import scan_repository
+from app.eca.file_classifier   import run_classifier
 from app.eca.content_processor import run_content_processor
-from app.context.aggregator import aggregate_context
-from app.context.normalizer import normalize_context
+from app.context.aggregator    import aggregate_context
+from app.context.normalizer    import normalize_context
 
-# Phase 2 & 3: Analysis & Requirement Generation
-from app.analysis.feature_extraction_agent import extract_features
-from app.analysis.feature_validator import validate_features
-from app.analysis.product_understanding_agent import understand_product
-from app.analysis.business_understanding_agent import understand_business
-from app.analysis.functional_requirement_generator import generate_requirements
+# ── Phase 2: Feature Analysis ──────────────────────────────────────────────
+from app.analysis.feature_extraction_agent      import extract_features
+from app.analysis.feature_validator             import validate_features
+from app.analysis.product_understanding_agent   import understand_product
+from app.analysis.business_understanding_agent  import understand_business
+
+# ── Phase 3: Requirement Generation ───────────────────────────────────────
+from app.analysis.functional_requirement_generator     import generate_requirements
 from app.analysis.non_functional_requirement_generator import generate_nfrs
 
-# Phase 4: Composition & Validation
-from app.analysis.brd_composer import compose_brd
-from app.analysis.brd_fix_loop import run_fix_loop
+# ── Phase 4: Technical Signal Extraction ──────────────────────────────────
+from app.eca.dependency_extractor import extract_dependencies
+from app.eca.entity_extractor     import extract_entities
+from app.eca.api_extractor        import extract_api_endpoints
+from app.eca.defect_extractor     import extract_defects
+from app.analysis.evidence_bundle import build_evidence_bundle
 
-# Phase 3.5: LLM Enrichment (optional — skipped gracefully if OPENAI_API_KEY not set)
-def _try_enrich(val_feats_list, prod_dict):
+# ── Phase 5: LLM BRD Composition & Validation ─────────────────────────────
+from app.analysis.llm_brd_composer  import compose_brd_llm
+from app.analysis.llm_brd_validator import validate_brd_llm
+
+
+# ---------------------------------------------------------------------------
+# LLM Enrichment Helper (optional pre-step)
+# ---------------------------------------------------------------------------
+
+def _try_enrich(
+    val_feats_list: List[Dict],
+    prod_dict: Dict,
+) -> tuple[List[Dict], Dict]:
     """
-    Attempt LLM enrichment. Returns enriched features and updated business context.
-    Silently skips if OPENAI_API_KEY is not configured.
+    Attempt LLM enrichment of feature descriptions.
+    Silently skips if OPENAI_API_KEY is not configured or any error occurs.
+    Returns (enriched_features, updated_prod_dict).
     """
-    import os
     if not os.environ.get("OPENAI_API_KEY"):
-        print("[LLM] OPENAI_API_KEY not set — skipping LLM enrichment.")
+        log(logger.info, "llm_enrichment.skipped", reason="OPENAI_API_KEY not set")
         return val_feats_list, prod_dict
+
     try:
         from app.utils.llm_enrichment import enrich_features, enrich_core_value
-        enriched_feats = enrich_features(val_feats_list)
-        core_value     = enrich_core_value(enriched_feats)
-        prod_dict      = dict(prod_dict)
-        prod_dict["core_value"] = core_value
-        return enriched_feats, prod_dict
-    except Exception as e:
-        print(f"[LLM] Enrichment failed, continuing with deterministic output. Error: {e}")
+        enriched   = enrich_features(val_feats_list)
+        core_value = enrich_core_value(enriched)
+        updated    = dict(prod_dict)
+        updated["core_value"] = core_value
+        log(logger.info, "llm_enrichment.complete", features=len(enriched))
+        return enriched, updated
+    except Exception as exc:
+        log(logger.warning, "llm_enrichment.failed", error=str(exc), action="using_original")
         return val_feats_list, prod_dict
 
 
-def log_stage(stage_num: str, name: str, status: str = "STARTED"):
-    """Helper function to cleanly log pipeline stages."""
-    if status == "STARTED":
-        print(f"\n[{stage_num}/10] \033[94m{name} -> {status}...\033[0m")
-    elif "SUCCESS" in status or "PASSED" in status:
-        print(f"[{stage_num}/10] \033[92m{name} -> {status}\033[0m")
-    else:
-        print(f"[{stage_num}/10] \033[91m{name} -> {status}\033[0m")
+# ---------------------------------------------------------------------------
+# Phase 4: Technical Signal Extraction (safe wrappers)
+# ---------------------------------------------------------------------------
 
-def run_end_to_end(repo_url: str, output_dir: str):
-    out_path = Path(output_dir)
+def _run_technical_extractors(dest_repo_dir: Path) -> Dict[str, Any]:
+    """
+    Run all four technical signal extractors.
+    Each extractor is wrapped defensively — failure returns an empty result,
+    never propagating to crash the pipeline.
+
+    Returns a dict with keys: dependencies, entities, api_endpoints, defects.
+    """
+    results: Dict[str, Any] = {
+        "dependencies": {"dependencies": [], "build_tool": "unknown", "language": "unknown", "uses_jcenter": False},
+        "entities":     {"entities": []},
+        "api_endpoints": {"endpoints": [], "grpc_rpcs": []},
+        "defects":      {"defects": []},
+    }
+
+    extractors = [
+        ("dependencies",  extract_dependencies,  "DependencyExtractor"),
+        ("entities",      extract_entities,      "EntityExtractor"),
+        ("api_endpoints", extract_api_endpoints, "ApiExtractor"),
+        ("defects",       extract_defects,       "DefectExtractor"),
+    ]
+
+    for key, fn, name in extractors:
+        with StageTimer(logger, f"extractor.{name.lower()}"):
+            try:
+                results[key] = fn(dest_repo_dir)
+                log(logger.info, f"extractor.{key}.ok",
+                    count=len(results[key].get(list(results[key].keys())[0], [])))
+            except Exception as exc:
+                log(logger.error, f"extractor.{key}.failed", error=str(exc), action="using_empty")
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Core Pipeline Logic (shared by API and CLI)
+# ---------------------------------------------------------------------------
+
+def run_pipeline(repo_url: str, output_path: str | None = None) -> Dict[str, Any]:
+    """
+    Execute Phase 1 context extraction only and return the raw payload.
+    Called by the /analyze endpoint and as the first step of run_end_to_end.
+    """
+    from app.context.validator         import validate_context
+    from app.output.final_output_builder import build_final_output
+
+    out_dir  = output_path or "runtime/pipeline_out"
+    out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     dest_repo_dir = out_path / "runner_repo"
 
-    print("\n==================================================")
-    print(f"🚀 INITIATING DETERMINISTIC BRD PIPELINE")
-    print(f"📦 Target: {repo_url}")
-    print("==================================================")
-
-    try:
-        # ─── PHASE 1: CONTEXT EXTRACTION ─────────────────────────────────────
-        log_stage("1", "RepoScanner")
-        scan_data = scan_repository(repo_url, str(dest_repo_dir), skip_clone=True)
+    with StageTimer(logger, "phase1.scan"):
+        scan_data = scan_repository(repo_url, str(dest_repo_dir), skip_clone=False)
         if "error" in scan_data:
             raise RuntimeError(f"RepoScanner failed: {scan_data['error']}")
-        log_stage("1", "RepoScanner", f"SUCCESS (Found {len(scan_data.get('files', []))} files)")
 
-        log_stage("2", "FileClassifier")
+    with StageTimer(logger, "phase1.classify"):
         classified_data = run_classifier(scan_data)
-        log_stage("2", "FileClassifier", "SUCCESS")
 
-        log_stage("3", "ContentProcessor")
+    with StageTimer(logger, "phase1.content"):
         chunks_data = run_content_processor(classified_data, dest_repo_dir)
-        log_stage("3", "ContentProcessor", f"SUCCESS (Generated {len(chunks_data.get('chunks', []))} chunks)")
 
-        log_stage("4", "ContextAggregator & Normalizer")
+    with StageTimer(logger, "phase1.aggregate"):
         aggregated_data = aggregate_context(chunks_data)
         normalized_data = normalize_context(aggregated_data)
-        norm_modules = normalized_data.get("normalized_modules", [])
-        log_stage("4", "ContextAggregator", f"SUCCESS ({len(norm_modules)} modules)")
-
-        # ─── PHASE 2: ANALYSIS & FEATURE EXTRACTION ─────────────────────────
-        log_stage("5", "FeatureExtractionAgent")
-        chunks_list = chunks_data.get("chunks", [])
-        feat_ext_result = extract_features(norm_modules, chunks_list)
-        raw_feats = feat_ext_result.model_dump()
-        log_stage("5", "FeatureExtractionAgent", f"SUCCESS ({len(raw_feats['features'])} raw features)")
-
-        log_stage("6", "FeatureValidator")
-        feat_val_result = validate_features(raw_feats["features"])
-        val_feats = feat_val_result.model_dump()
-        log_stage("6", "FeatureValidator", f"SUCCESS ({len(val_feats['validated_features'])} validated features)")
-
-        log_stage("7", "ProductUnderstandingAgent")
-        prod_result = understand_product(val_feats["validated_features"])
-        prod_dict = prod_result.model_dump()
-        log_stage("7", "ProductUnderstandingAgent", f"SUCCESS (Archetype: {prod_dict['product']['name']})")
-
-        # ─── PHASE 3: REQUIREMENT GENERATION ─────────────────────────────────
-        log_stage("8", "FunctionalRequirementGenerator")
-        fr_result = generate_requirements(val_feats["validated_features"])
-        fr_dict = fr_result.model_dump()
-        log_stage("8", "FunctionalRequirementGenerator", f"SUCCESS ({len(fr_dict['functional_requirements'])} FRs)")
-
-        log_stage("9", "NonFunctionalRequirementGenerator")
-        system_type = prod_dict['product']['name']
-        nfr_result = generate_nfrs(system_type=system_type, tech_stack=[])
-        nfr_dict = nfr_result.model_dump()
-        log_stage("9", "NonFunctionalRequirementGenerator", f"SUCCESS ({len(nfr_dict['non_functional_requirements'])} NFRs)")
-
-        # ─── PHASE 3.5: LLM ENRICHMENT ───────────────────────────────────
-        enriched_feat_list, prod_dict = _try_enrich(
-            val_feats["validated_features"], prod_dict
-        )
-        val_feats["validated_features"] = enriched_feat_list
-
-        # ─── PHASE 3.6: BUSINESS UNDERSTANDING ─────────────────────────────
-        # FIX (Bug 1.3): Call BusinessUnderstandingAgent explicitly so
-        # compose_brd() receives product_type, primary_users, core_value.
-        biz_result = understand_business(
-            val_feats["validated_features"],
-            system_type=prod_dict['product']['name']
-        )
-        biz_ctx = biz_result.model_dump()["business_context"]
-        # Merge product summary into business context for Executive Summary richness
-        biz_ctx["product_summary"] = prod_dict["product"].get("summary", "")
-        biz_ctx["core_capabilities"] = prod_dict["product"].get("core_capabilities", [])
-        biz_ctx["repo_name"] = scan_data.get("repo_name", "Unknown Repository")
-
-        # ─── PHASE 4: COMPOSITION & VALIDATION ───────────────────────────────
-        log_stage("10", "BRDComposer & FixLoop")
-        # FIX (Bug 1.1): Pass correct keyword argument names matching compose_brd() signature.
-        initial_markdown = compose_brd(
-            business_context=biz_ctx,
-            features=val_feats["validated_features"],
-            functional_requirements=fr_dict["functional_requirements"],
-            non_functional_requirements=nfr_dict["non_functional_requirements"],
-        )
-        
-        loop_result = run_fix_loop(initial_markdown, max_iterations=2)
-        final_markdown = loop_result["final_markdown"]
-        final_val = loop_result["final_validation"]
-        
-        score = final_val["score"]
-        status = "PASSED" if score >= 0.85 else "FAILED"
-        log_stage("10", "BRDComposer & FixLoop", f"SUCCESS ({status} with score {score:.2f})")
-
-        if final_val["issues"]:
-            print("⚠️ Remaining Issues:")
-            for issue in final_val["issues"]:
-                print(f"   - {issue}")
-
-        # ─── OUTPUT ─────────────────────────────────────────────────────────
-        brd_out_path = out_path / "Target_BRD.md"
-        with open(brd_out_path, "w", encoding="utf-8") as f:
-            f.write(final_markdown)
-
-        print("\n==================================================")
-        print("✅ BRD PIPELINE COMPLETED SUCCESSFULLY")
-        print(f"📄 Output saved to: {brd_out_path}")
-        print("==================================================\n")
-
-    except Exception as e:
-        import traceback
-        print("\n==================================================")
-        print("❌ PIPELINE FAILED")
-        traceback.print_exc()
-        print("==================================================\n")
-        sys.exit(1)
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run the full Analyst-Agent pipeline to generate a BRD.")
-    parser.add_argument("repo_url", help="URL of the target GitHub repository")
-    parser.add_argument("--outdir", default="runtime/pipeline_out", help="Directory to store outputs")
-    args = parser.parse_args()
-
-    run_end_to_end(args.repo_url, args.outdir)
-
-def run_pipeline(repo_url: str, output_path: str = None) -> dict:
-    from app.eca.repo_scanner import scan_repository
-    from app.eca.file_classifier import run_classifier
-    from app.eca.content_processor import run_content_processor
-    from app.context.aggregator import aggregate_context
-    from app.context.normalizer import normalize_context
-    from app.context.validator import validate_context
-    from app.output.final_output_builder import build_final_output
-    from pathlib import Path
-
-    out_dir = output_path if output_path else "runtime/pipeline_out"
-    out_path_obj = Path(out_dir)
-    out_path_obj.mkdir(parents=True, exist_ok=True)
-    dest_repo_dir = out_path_obj / "runner_repo"
-
-    scan_data = scan_repository(repo_url, str(dest_repo_dir), skip_clone=False)
-    if "error" in scan_data:
-        raise RuntimeError(f"RepoScanner failed: {scan_data['error']}")
-
-    classified_data = run_classifier(scan_data)
-    chunks_data = run_content_processor(classified_data, dest_repo_dir)
-
-    aggregated_data = aggregate_context(chunks_data)
-    normalized_data = normalize_context(aggregated_data)
 
     validation_data = validate_context(normalized_data)
 
     final_payload = build_final_output(
-        scan_data,
-        classified_data,
-        chunks_data,
-        normalized_data,
-        validation_data
+        scan_data, classified_data, chunks_data, normalized_data, validation_data,
     )
+
+    # Attach raw scan_data for downstream use (extractors need repo path)
+    final_payload["_scan_data"]     = scan_data
+    final_payload["_dest_repo_dir"] = str(dest_repo_dir)
+    final_payload["_chunks"]        = chunks_data.get("chunks", [])
+
     return final_payload
+
+
+def run_full_brd_pipeline(
+    repo_url:    str,
+    output_path: str | None = None,
+) -> Dict[str, Any]:
+    """
+    Execute the full 5-phase BRD pipeline.
+    Returns a dict containing: markdown, validation, evidence_bundle, final_payload.
+
+    This is the main entry point for the /analyze-and-convert API endpoint.
+    """
+    out_dir  = output_path or "runtime/pipeline_out"
+    out_path = Path(out_dir)
+
+    log(logger.info, "pipeline.start", repo=repo_url)
+
+    # ── Phase 1: Context Extraction ────────────────────────────────────────
+    logger.info("phase1.start")
+    final_payload  = run_pipeline(repo_url, out_dir)
+    scan_data      = final_payload.pop("_scan_data", {})
+    dest_repo_dir  = Path(final_payload.pop("_dest_repo_dir", out_dir))
+    chunks_list    = final_payload.pop("_chunks", [])
+
+    # FIX (Bug 1.2): key is "modules", not "normalized_modules"
+    norm_modules = final_payload.get("modules", final_payload.get("normalized_modules", []))
+    log(logger.info, "phase1.complete", modules=len(norm_modules), chunks=len(chunks_list))
+
+    # ── Phase 2: Feature Analysis ─────────────────────────────────────────
+    logger.info("phase2.start")
+    with StageTimer(logger, "phase2.feature_extraction"):
+        feat_ext    = extract_features(norm_modules, chunks_list)
+        raw_feats   = feat_ext.model_dump()["features"]
+
+    with StageTimer(logger, "phase2.feature_validation"):
+        val_result  = validate_features(raw_feats)
+        val_feats   = val_result.model_dump()["validated_features"]
+
+    with StageTimer(logger, "phase2.product_understanding"):
+        prod_result = understand_product(val_feats)
+        prod_dict   = prod_result.model_dump()
+
+    with StageTimer(logger, "phase2.llm_enrichment"):
+        val_feats, prod_dict = _try_enrich(val_feats, prod_dict)
+
+    with StageTimer(logger, "phase2.business_understanding"):
+        biz_result = understand_business(val_feats, system_type=prod_dict["product"]["name"])
+        biz_ctx    = biz_result.model_dump()["business_context"]
+        biz_ctx["product_summary"]   = prod_dict["product"].get("summary", "")
+        biz_ctx["core_capabilities"] = prod_dict["product"].get("core_capabilities", [])
+        biz_ctx["repo_name"]         = scan_data.get("repo_name", repo_url.rstrip("/").rsplit("/", 1)[-1])
+
+    log(logger.info, "phase2.complete", features=len(val_feats))
+
+    # ── Phase 3: Requirement Generation ───────────────────────────────────
+    logger.info("phase3.start")
+    with StageTimer(logger, "phase3.fr_generation"):
+        fr_result = generate_requirements(val_feats)
+        frs       = fr_result.model_dump()["functional_requirements"]
+
+    with StageTimer(logger, "phase3.nfr_generation"):
+        nfr_result = generate_nfrs(system_type=prod_dict["product"]["name"], tech_stack=[])
+        nfrs       = nfr_result.model_dump()["non_functional_requirements"]
+
+    log(logger.info, "phase3.complete", frs=len(frs), nfrs=len(nfrs))
+
+    # ── Phase 4: Technical Signal Extraction ──────────────────────────────
+    logger.info("phase4.start")
+    tech_signals = _run_technical_extractors(dest_repo_dir)
+
+    with StageTimer(logger, "phase4.evidence_bundle"):
+        bundle = build_evidence_bundle(
+            scan_data        = scan_data,
+            validated_feats  = val_feats,
+            frs              = frs,
+            nfrs             = nfrs,
+            biz_ctx          = biz_ctx,
+            chunks           = chunks_list,
+            dependencies     = tech_signals["dependencies"],
+            entities         = tech_signals["entities"],
+            api_endpoints    = tech_signals["api_endpoints"],
+            defects          = tech_signals["defects"],
+        )
+
+    log(logger.info, "phase4.complete",
+        deps=len(bundle.get("dependencies", [])),
+        entities=len(bundle.get("entities", [])),
+        endpoints=len(bundle.get("endpoints", [])),
+        defects=len(bundle.get("defects", [])))
+
+    # ── Phase 5: LLM BRD Composition & Validation ─────────────────────────
+    logger.info("phase5.start")
+    with StageTimer(logger, "phase5.llm_composition"):
+        final_markdown = compose_brd_llm(bundle)
+
+    with StageTimer(logger, "phase5.validation"):
+        validation = validate_brd_llm(final_markdown, bundle)
+
+    log(logger.info, "phase5.complete",
+        score=validation["score"],
+        verdict=validation["verdict"],
+        issues=len(validation["issues"]))
+
+    # ── Save outputs ────────────────────────────────────────────────────────
+    out_path.mkdir(parents=True, exist_ok=True)
+    (out_path / "Target_BRD.md").write_text(final_markdown, encoding="utf-8")
+    (out_path / "evidence_bundle.json").write_text(
+        json.dumps(bundle, indent=2, default=str), encoding="utf-8"
+    )
+
+    log(logger.info, "pipeline.complete",
+        repo=bundle.get("repo_name"), brd=str(out_path / "Target_BRD.md"))
+
+    return {
+        "markdown":        final_markdown,
+        "validation":      validation,
+        "evidence_bundle": bundle,
+        "final_payload":   final_payload,
+    }
+
+
+# ---------------------------------------------------------------------------
+# CLI Entry Point
+# ---------------------------------------------------------------------------
+
+def run_end_to_end(repo_url: str, output_dir: str) -> None:
+    """CLI wrapper around run_full_brd_pipeline with human-readable output."""
+    log(logger.info, "cli.start", repo=repo_url, outdir=output_dir)
+    try:
+        result = run_full_brd_pipeline(repo_url, output_dir)
+        val    = result["validation"]
+        log(logger.info, "cli.done",
+            score=val["score"], verdict=val["verdict"],
+            brd=str(Path(output_dir) / "Target_BRD.md"))
+        if val["issues"]:
+            for iss in val["issues"][:5]:
+                log(logger.warning, "validation.issue", detail=iss)
+    except Exception:
+        logger.error("cli.pipeline_failed")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Analyst Agent — Full BRD Pipeline")
+    parser.add_argument("repo_url", help="GitHub repository URL")
+    parser.add_argument("--outdir", default="runtime/pipeline_out", help="Output directory")
+    args = parser.parse_args()
+    run_end_to_end(args.repo_url, args.outdir)

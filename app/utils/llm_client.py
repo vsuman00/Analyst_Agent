@@ -59,18 +59,24 @@ except ImportError:
 _API_KEY    = os.environ.get("OPENAI_API_KEY", "")
 _MODEL      = os.environ.get("OPENAI_MODEL",      "gpt-4o-mini")
 _MAX_TOKENS = int(os.environ.get("OPENAI_MAX_TOKENS", "2048"))
-_TEMPERATURE = 0       # Deterministic output — do NOT raise without explicit reason
+_TEMPERATURE = 0       # Deterministic — do NOT raise without explicit reason
 _MAX_RETRIES = 3
 _RETRY_DELAY = 2       # seconds between retries
 
-if not _API_KEY:
-    raise EnvironmentError(
-        "OPENAI_API_KEY environment variable is not set.\n"
-        "  1. Create a .env file in the project root with: OPENAI_API_KEY=sk-...\n"
-        "  2. Or export it in your shell: export OPENAI_API_KEY=sk-..."
-    )
+# Lazy init: if API key is missing, _client is None.
+# All callers check for None and fall back to deterministic mode gracefully.
+_client = None
 
-_client = OpenAI(api_key=_API_KEY)
+if not _API_KEY:
+    import warnings
+    warnings.warn(
+        "OPENAI_API_KEY is not set. LLM features are disabled. "
+        "Pipeline will run in deterministic-only mode. "
+        "Set OPENAI_API_KEY in .env to enable LLM BRD composition.",
+        stacklevel=2,
+    )
+else:
+    _client = OpenAI(api_key=_API_KEY)
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +100,12 @@ def _call_with_retry(
     }
     if response_format:
         kwargs["response_format"] = response_format
+
+    if _client is None:
+        raise RuntimeError(
+            "LLM client is not initialised. "
+            "Set OPENAI_API_KEY in your .env file to enable LLM features."
+        )
 
     last_error: Exception = RuntimeError("Unknown error")
     for attempt in range(1, _MAX_RETRIES + 1):
