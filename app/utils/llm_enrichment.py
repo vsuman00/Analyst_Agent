@@ -4,14 +4,17 @@ llm_enrichment.py — Layer 3 Tool
 LLM Enrichment Layer
 
 Sits between the deterministic pipeline stages and the BRD Composer.
-Uses OpenAI to improve three specific outputs that benefit from language generation:
+Uses OpenAI to improve specific outputs that benefit from language generation:
 
+  0. Feature Pruning        — Semantically validate extracted features to prune false positives.
   1. Feature Descriptions   — Enrich terse extracted feature descriptions with
                               one precise, professional sentence (grounded in evidence).
   2. Executive Summary      — Generate a concise (≤120 words) executive summary
                               grounded strictly in the input business context.
   3. Business Core Value    — Refine the core_value field in BusinessContext with
                               a professionally written value statement.
+  4. Enterprise Artifacts   — Generate tailored Stakeholders, CI/CD, Infra, Data,
+                              and Compliance standards.
 
 Rules (enforced in prompts and post-processing):
   - LLM MUST NOT invent features, requirements, or stakeholders.
@@ -33,6 +36,51 @@ import json
 from typing import Dict, List, Any
 
 from app.utils.llm_client import llm_json_call, llm_text_call
+
+
+# ---------------------------------------------------------------------------
+# 0. Feature Pruning (Semantic Validation)
+# ---------------------------------------------------------------------------
+
+PRUNE_SYSTEM_PROMPT = """\
+You are a Principal Software Architect reviewing an automated static analysis report.
+You will be given a list of 'Extracted Features' and a brief summary of the repository's core modules.
+Your job is to identify and REMOVE any features that are "false positives" (hallucinations) 
+caused by generic programming keywords being misinterpreted as business features.
+
+For example, a Weather App might use the word "connection" for an HTTP request. If the report claims it has a "Social Graph (Follow/Friend)" feature because of the word "connection", that is a false positive and must be removed.
+
+STRICT RULES:
+- Return ONLY a JSON object containing a list of the IDs of the VALID features.
+- Schema: {"valid_feature_ids": ["feat-001", "feat-003"]}
+- If all are valid, return all IDs.
+- If none are valid, return an empty list: {"valid_feature_ids": []}
+"""
+
+def prune_hallucinated_features(features: List[Dict[str, Any]], repo_context: str) -> List[Dict[str, Any]]:
+    """
+    Uses the LLM to semantically validate extracted features and prune false positives.
+    """
+    if not features:
+        return []
+        
+    feats_str = "\n".join([f"- {f.get('id')}: {f.get('name')} (Evidence: {', '.join(f.get('source_modules', []))})" for f in features])
+    
+    user_prompt = (
+        f"Repository Context / Top Modules: {repo_context}\n\n"
+        f"Extracted Features to Validate:\n{feats_str}\n\n"
+        "Analyze these features. Return the JSON list of 'valid_feature_ids' that genuinely belong to this type of repository."
+    )
+    
+    try:
+        result = llm_json_call(PRUNE_SYSTEM_PROMPT, user_prompt, max_tokens=500)
+        if "valid_feature_ids" in result:
+            valid_ids = result["valid_feature_ids"]
+            return [f for f in features if f.get("id") in valid_ids]
+        return features
+    except Exception as e:
+        print(f"[LLM ENRICHMENT] Feature pruning failed, returning original features. Error: {e}")
+        return features
 
 
 # ---------------------------------------------------------------------------
@@ -175,3 +223,45 @@ def _fallback_core_value(features: List[Dict]) -> str:
     if not top:
         return "Delivers core system functionality."
     return "Delivers " + ", ".join(top) + " functionality."
+
+# ---------------------------------------------------------------------------
+# 4. Enterprise Artifacts Generation (NEW)
+# ---------------------------------------------------------------------------
+
+ENTERPRISE_ARTIFACTS_PROMPT = """\
+You are an enterprise technical architect. Given a software system's context, \
+generate specific, tailored enterprise artifacts. Do NOT use generic placeholders. \
+Tailor the infrastructure, data, compliance, and CI/CD standards to the actual tech stack and features provided.
+
+Return ONLY valid JSON matching this schema:
+{
+  "stakeholders": [{"role": "string", "responsibility": "string", "impact": "High|Medium|Low"}],
+  "data_requirements": [{"requirement": "string", "specification": "string"}],
+  "infrastructure": [{"aspect": "string", "specification": "string"}],
+  "cicd_standards": [{"id": "CI-01", "standard": "string"}],
+  "compliance": [{"domain": "string", "requirement": "string", "strategy": "string"}],
+  "risks": [{"id": "R-01", "description": "string", "probability": "High|Medium|Low", "impact": "High|Medium|Low", "mitigation": "string"}]
+}
+"""
+
+def enrich_enterprise_artifacts(business_context: Dict, features: List[Dict], tech_stack: List[str]) -> Dict[str, Any]:
+    """
+    Use LLM to generate domain-specific content for the enterprise BRD sections (Data, CI/CD, Infra, etc.).
+    Returns an empty dict if it fails, which the composer will handle via fallbacks.
+    """
+    feature_names = [f.get("name", "").replace("_", " ") for f in features[:10]]
+    
+    user_prompt = (
+        f"System Type: {business_context.get('product_type', 'Software System')}\n"
+        f"Tech Stack: {', '.join(tech_stack) if tech_stack else 'Unknown/Generic'}\n"
+        f"Core Features: {', '.join(feature_names)}\n\n"
+        "Generate the enterprise artifacts JSON."
+    )
+    
+    try:
+        # High max_tokens because it generates a lot of JSON
+        result = llm_json_call(ENTERPRISE_ARTIFACTS_PROMPT, user_prompt, max_tokens=1500)
+        return result
+    except Exception as e:
+        print(f"[LLM ENRICHMENT] Enterprise artifacts generation failed. Error: {e}")
+        return {}

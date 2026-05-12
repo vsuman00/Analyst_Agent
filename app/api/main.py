@@ -7,6 +7,16 @@ from typing import Any, Dict, List, Optional
 import traceback
 import os
 
+# Load environment variables from .env at startup so OPENAI_API_KEY
+# and other secrets are available to all pipeline modules.
+try:
+    from dotenv import load_dotenv
+    from pathlib import Path as _Path
+    _env_path = _Path(__file__).resolve().parent.parent.parent / ".env"
+    load_dotenv(dotenv_path=_env_path, override=False)  # override=False: OS env vars take priority
+except ImportError:
+    pass  # python-dotenv not installed; rely on shell environment
+
 app = FastAPI(
     title="Analyst Agent API",
     description="Enterprise-grade AI backend system for converting GitHub repositories into Business Requirement Documents (BRDs).",
@@ -113,6 +123,14 @@ async def analyze_and_convert(request: AnalyzeRequest):
         feat_ext = extract_features(norm_modules, chunks)
         val_feats = validate_features(feat_ext.model_dump()["features"])
         val_feats_list = val_feats.model_dump()["validated_features"]
+        
+        # Prune hallucinations
+        from app.utils.llm_enrichment import prune_hallucinated_features
+        import os
+        if os.environ.get("OPENAI_API_KEY"):
+            repo_ctx = ", ".join([m.get("name", "") for m in norm_modules[:5]])
+            val_feats_list = prune_hallucinated_features(val_feats_list, repo_ctx)
+
         prod_und = understand_product(val_feats_list)
         prod_dict = prod_und.model_dump()
 
@@ -124,7 +142,7 @@ async def analyze_and_convert(request: AnalyzeRequest):
 
         # 5. Optional LLM Enrichment
         from app.pipeline.runner import _try_enrich
-        enriched_feats, prod_enriched = _try_enrich(val_feats_list, prod_dict)
+        enriched_feats, prod_enriched, artifacts = _try_enrich(val_feats_list, prod_dict, tech_stack)
 
         # FIX (Bug 1.3): Call BusinessUnderstandingAgent explicitly so compose_brd()
         # receives real product_type, primary_users, core_value — not fallback strings.
@@ -137,6 +155,8 @@ async def analyze_and_convert(request: AnalyzeRequest):
         biz_ctx["product_summary"] = prod_dict["product"].get("summary", "")
         biz_ctx["core_capabilities"] = prod_dict["product"].get("core_capabilities", [])
         biz_ctx["repo_name"] = final_payload.get("repo_name", request.repo_url.rstrip("/").rsplit("/", 1)[-1])
+        biz_ctx["tech_stack"] = tech_stack
+        biz_ctx["enterprise_artifacts"] = artifacts
 
         feat_list = enriched_feats if isinstance(enriched_feats, list) else []
         fr_list = fr_gen.model_dump().get("functional_requirements", [])
@@ -312,8 +332,8 @@ async def generate_nfrs_endpoint(request: GenerateNFRsRequest):
     from app.analysis.non_functional_requirement_generator import generate_nfrs
     try:
         result = generate_nfrs(
-            request.validated_features,
-            product_name=request.product_name or "",
+            system_type=request.product_name or "",
+            tech_stack=[]
         )
         return {"status": "success", "data": result.model_dump()}
     except Exception as e:
@@ -426,20 +446,22 @@ async def download_brd_docx(request: DownloadBRDRequest):
     Requires python-docx to be installed.
     Input : { "brd_markdown": "...", "filename": "brd_output" }
     """
-    import tempfile
     from fastapi.responses import FileResponse
     from app.analysis.document_generator import markdown_to_docx
     from pathlib import Path
 
     filename = (request.filename or "brd_output").replace(" ", "_")
     try:
-        with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
-            tmp_path = Path(tmp.name)
+        # Save directly to the pipeline_out directory instead of a system temp folder
+        out_dir = Path("runtime/pipeline_out")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        
+        file_path = out_dir / f"{filename}.docx"
 
-        markdown_to_docx(request.brd_markdown, tmp_path)
+        markdown_to_docx(request.brd_markdown, file_path)
 
         return FileResponse(
-            path=str(tmp_path),
+            path=str(file_path),
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             filename=f"{filename}.docx",
         )

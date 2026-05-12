@@ -13,9 +13,9 @@ from typing import Dict, List, Any
 # ---------------------------------------------------------------------------
 
 def _moscow(confidence: float) -> str:
-    if confidence >= 0.8: return "M"
-    if confidence >= 0.6: return "S"
-    return "C"
+    if confidence >= 0.8: return "Must Have"
+    if confidence >= 0.6: return "Should Have"
+    return "Could Have"
 
 def _display(name: str) -> str:
     return name.replace("_", " ").title()
@@ -23,21 +23,23 @@ def _display(name: str) -> str:
 def _rest_path(name: str) -> str:
     return "/" + name.lower().replace(" ", "-").replace("_", "-")
 
+def _has_keyword(keyword: str, text_list: List[str]) -> bool:
+    return any(keyword.lower() in t.lower() for t in text_list)
+
 # ---------------------------------------------------------------------------
 # Section builders
 # ---------------------------------------------------------------------------
 
 def _cover(biz: Dict, today: str) -> str:
-    repo = biz.get("repo_name", "Target System")
-    ptype = biz.get("product_type", "Software System")
+    repo = biz.get("repo_name", "Enterprise System")
+    ptype = biz.get("product_type", "Software Application")
     return (
-        f"# BUSINESS REQUIREMENTS DOCUMENT\n\n"
-        f"**Project:** {repo}  \n"
-        f"**System Type:** {ptype}  \n"
-        f"**Prepared by:** Analyst Agent  \n"
-        f"**Version:** 1.0 — Draft  \n"
+        f"# BUSINESS REQUIREMENTS DOCUMENT (BRD)\n\n"
+        f"**Project / Repository:** {repo}  \n"
+        f"**System Archetype:** {ptype}  \n"
+        f"**Document Version:** 1.0 — Final  \n"
         f"**Date:** {today}  \n"
-        f"**Status:** Draft — Pending Review  \n\n---\n\n"
+        f"**Status:** Formal Review  \n\n---\n\n"
         "## Table of Contents\n\n"
         "1. Executive Summary\n"
         "2. Business Context & Objectives\n"
@@ -57,155 +59,166 @@ def _cover(biz: Dict, today: str) -> str:
         "16. Document Approval\n\n---\n"
     )
 
-
 def _s1_exec_summary(biz: Dict, features: List[Dict]) -> str:
     ptype = biz.get("product_type", "Software System")
-    core_value = biz.get("core_value", "")
-    summary = biz.get("product_summary", "")
+    core_value = biz.get("core_value", "Provides core system functionality and data management.")
+    summary = biz.get("product_summary", "A modern enterprise application.")
     caps = biz.get("core_capabilities", [])
-    n = len(features)
-    high = [f for f in features if float(f.get("confidence", 0)) >= 0.8]
+    
+    high_feats = [f for f in features if float(f.get("confidence", 0)) >= 0.8]
+    low_feats = [f for f in features if float(f.get("confidence", 0)) < 0.6]
 
-    pain_bullets = ""
-    low_conf = [f for f in features if float(f.get("confidence", 0)) < 0.6]
-    if low_conf:
-        pain_bullets = "\n".join(f"- Low-confidence capability detected: **{_display(f.get('name',''))}** ({float(f.get('confidence',0)):.0%})" for f in low_conf[:4])
-    else:
-        pain_bullets = "- No critical deficiencies detected in feature confidence scores."
+    caps_str = ", ".join(caps) if caps else "General operations, Data processing, and User management"
 
-    caps_str = ", ".join(caps[:4]) if caps else "core system capabilities"
-
-    return (
+    exec_summary = (
         f"## 1. Executive Summary\n\n"
-        f"This document specifies the complete business and technical requirements for the **{ptype}**. "
-        f"Static analysis identified **{n} functional capabilities**, of which **{len(high)}** carry high confidence (≥80%). "
+        f"This Business Requirements Document (BRD) specifies the functional, non-functional, and technical "
+        f"requirements for the **{ptype}**. Based on comprehensive static analysis, the system encompasses "
+        f"**{len(features)} functional domains**, of which **{len(high_feats)}** have been identified as high-confidence core capabilities. "
         f"{core_value}\n\n"
-        f"{summary}\n\n"
-        f"**Key Identified Areas:**\n\n{pain_bullets}\n\n"
-        f"**Core Capabilities:** {caps_str}\n\n"
-        "_This BRD is generated deterministically from structured pipeline analysis. "
-        "All technical data is sourced directly from the repository._\n\n---\n"
+        f"**System Overview:**\n{summary}\n\n"
+        f"**Core Capabilities:**\n- " + "\n- ".join(caps if caps else ["Core system functionality"]) + "\n\n"
     )
+
+    if low_feats:
+        exec_summary += (
+            "**Areas Requiring Review:**\n"
+            "The following modules exhibited low confidence during static analysis and may require further architectural discovery:\n"
+        )
+        for f in low_feats[:3]:
+            exec_summary += f"- **{_display(f.get('name',''))}**: {f.get('description', 'Requires review.')}\n"
+
+    exec_summary += "\n---\n"
+    return exec_summary
 
 
 def _s2_business_context(biz: Dict, features: List[Dict]) -> str:
     ptype = biz.get("product_type", "Software System")
-    caps = biz.get("core_capabilities", [])
     high_feats = [_display(f.get("name","")) for f in features if float(f.get("confidence",0)) >= 0.8]
-    low_feats  = [_display(f.get("name","")) for f in features if float(f.get("confidence",0)) < 0.6]
 
-    in_scope = "\n".join(f"- {c}" for c in (high_feats or caps or ["Core system functionality"])[:6])
+    in_scope = "\n".join(f"- {c}" for c in (high_feats or ["Core application functionality", "Data persistence", "API routing"])[:8])
     out_scope = (
-        "- Mobile client application changes\n"
-        "- Frontend / web UI development (if not present)\n"
-        "- Multi-region deployment\n"
-        "- Machine learning-based features\n"
-        "- Real-time WebSocket/SSE push (deferred)"
+        "- Legacy system data migration (unless explicitly scripted)\n"
+        "- Third-party vendor platform modifications\n"
+        "- End-user hardware provisioning\n"
     )
-    problem = (
-        f"- {len(low_feats)} capability area(s) carry low confidence scores, indicating incomplete implementation or missing modules.\n"
-        if low_feats else
-        "- System capabilities are well-defined. Focus is on modernization and quality improvement.\n"
-    )
+    
+    problem_stmt = "The current system requires formal specification and modernization to ensure scalability, maintainability, and alignment with enterprise architecture standards."
 
-    goals_rows = "| G-01 | Upgrade all end-of-life dependencies | All deps at actively supported versions |\n"
-    if any("auth" in f.get("name","").lower() for f in features):
-        goals_rows += "| G-02 | Harden authentication layer | Zero P0 auth vulnerabilities |\n"
-    if any("test" in f.get("name","").lower() for f in features):
-        goals_rows += "| G-03 | Achieve automated test coverage | >= 80% line coverage |\n"
-    goals_rows += "| G-04 | Add observability stack | Tracing + structured logs live in production |\n"
-    goals_rows += "| G-05 | CI/CD pipeline modernization | Full automated deploy on every merge to main |\n"
+    goals_rows = "| G-01 | Architecture Modernization | Ensure all components align with current target architecture |\n"
+    goals_rows += "| G-02 | Code Quality & Coverage | Achieve >80% automated test coverage across core modules |\n"
+    
+    if _has_keyword("auth", [f.get("name","") for f in features]):
+        goals_rows += "| G-03 | Security Hardening | Secure authentication and authorization boundaries |\n"
+    else:
+        goals_rows += "| G-03 | Performance Optimization | Ensure response times meet enterprise SLAs |\n"
+        
+    goals_rows += "| G-04 | CI/CD Automation | Establish zero-touch deployment pipelines |\n"
 
     return (
         f"## 2. Business Context & Objectives\n\n"
         f"### 2.1 Business Problem Statement\n\n"
-        f"The current **{ptype}** system requires modernization:\n\n{problem}\n"
-        f"### 2.2 Modernization Goals\n\n"
+        f"{problem_stmt}\n\n"
+        f"### 2.2 Project Goals\n\n"
         f"| # | Goal | Success Metric |\n|---|---|---|\n{goals_rows}\n"
         f"### 2.3 Project Scope\n\n"
         f"#### In Scope\n\n{in_scope}\n\n"
-        f"#### Out of Scope (Phase 1)\n\n{out_scope}\n\n---\n"
+        f"#### Out of Scope\n\n{out_scope}\n\n---\n"
     )
-
 
 def _s3_current_state(biz: Dict, features: List[Dict]) -> str:
     ptype = biz.get("product_type", "Software System")
 
-    # Build layer table from features
-    layer_map = {
-        "REST API Routing": ("Controllers / Handlers", "Spring MVC / gRPC"),
-        "Domain Service Layer": ("Services / Domain Logic", "Kotlin / Java"),
-        "Database Access Layer": ("Data Access / Repositories", "JPA / JDBC"),
-        "Automated Test Suite": ("Tests", "JUnit / Mockito"),
-        "Container Orchestration Config": ("Infrastructure", "Docker / Kubernetes"),
-        "CI/CD Pipeline Config": ("CI/CD", "GitHub Actions / Jenkins"),
-    }
-    feat_names = {f.get("name","") for f in features}
     inv_rows = ""
-    for feat_name, (layer, tech) in layer_map.items():
-        if feat_name in feat_names:
-            inv_rows += f"| {layer} | Detected | {tech} |\n"
-    if not inv_rows:
-        inv_rows = "| Core Modules | Detected | Derived from repository scan |\n"
+    domain_rows = ""
+    
+    for f in features:
+        name = f.get('name', '')
+        desc = f.get('description', '')
+        conf = float(f.get('confidence', 0))
+        
+        # Determine Layer
+        layer = "Application Layer"
+        if "api" in name or "routing" in name or "controller" in name:
+            layer = "API / Routing Layer"
+        elif "db" in name or "database" in name or "data" in name or "repo" in name:
+            layer = "Data Access Layer"
+        elif "service" in name or "logic" in name:
+            layer = "Domain Service Layer"
+        elif "ui" in name or "frontend" in name or "view" in name:
+            layer = "Presentation Layer"
+        elif "auth" in name or "security" in name:
+            layer = "Security Layer"
+        elif "test" in name:
+            layer = "Testing Suite"
+            
+        inv_rows += f"| {layer} | {_display(name)} | {conf:.0%} |\n"
+        
+        # Collect Domain Entities
+        if "entity" in name or "model" in name or "management" in name or "system" in name:
+            domain_rows += f"| {_display(name)} | Core Entity / Subsystem | {desc.split('.')[0]} |\n"
 
-    # Known defects from low-confidence features
-    defect_rows = ""
-    for i, f in enumerate([x for x in features if float(x.get("confidence",0)) < 0.6], 1):
-        defect_rows += f"| DEF-{i:02d} | Low confidence in **{_display(f.get('name',''))}** ({float(f.get('confidence',0)):.0%}) | Verify implementation completeness |\n"
-    if not defect_rows:
-        defect_rows = "| — | No critical defects identified from static analysis | — |\n"
+    if not inv_rows:
+        inv_rows = "| Core Module | Generic Component | 100% |\n"
+    if not domain_rows:
+        domain_rows = "| System Object | Generic Entity | Represents core state |\n"
 
     return (
         f"## 3. Current State Analysis (AS-IS)\n\n"
         f"### 3.1 Architecture Overview\n\n"
-        f"The system is a **{ptype}** identified through static code analysis. "
-        f"The following architectural layers were detected:\n\n"
-        f"| Layer | Status | Key Technologies |\n|---|---|---|\n{inv_rows}\n"
+        f"The {ptype} comprises multiple functional boundaries mapped during static analysis.\n\n"
+        f"| Layer / Component | Detected Module | Confidence |\n|---|---|---|\n{inv_rows}\n"
         f"### 3.2 Domain Entity Catalogue\n\n"
-        "_Entity classes detected during static analysis. Refer to source code for full schema definitions._\n\n"
-        f"| Entity | Type | Notes |\n|---|---|---|\n"
-        + "".join(f"| {_display(f.get('name',''))} | Domain Model | Confidence: {float(f.get('confidence',0)):.0%} |\n" for f in features[:6])
-        + f"\n### 3.3 Known Defects\n\n"
-        f"| ID | Description | Action Required |\n|---|---|---|\n{defect_rows}\n"
-        f"### 3.4 Infrastructure Current State\n\n"
-        "- Container orchestration: Kubernetes (version to be confirmed from manifest files)\n"
-        "- CI/CD: Detected from pipeline config files\n"
-        "- Database: Detected from repository access layer\n\n---\n"
+        f"| Entity / Domain | Type | Description |\n|---|---|---|\n{domain_rows}\n"
+        f"---\n"
     )
 
 
 def _s4_stakeholders(biz: Dict) -> str:
-    users = biz.get("primary_users", ["End Users"])
-    rows = "\n".join(f"| {u} | Feature consumer / primary actor | High |" for u in users)
-    rows += "\n| Engineering Lead | Technical decisions & architecture | High |"
-    rows += "\n| Product Owner | Requirement sign-off | High |"
-    rows += "\n| DevOps Engineer | Infrastructure & deployment | Medium |"
-    rows += "\n| QA Engineer | Test coverage & acceptance | Medium |"
+    artifacts = biz.get("enterprise_artifacts", {})
+    if artifacts and "stakeholders" in artifacts and artifacts["stakeholders"]:
+        rows = ""
+        for s in artifacts["stakeholders"]:
+            rows += f"| {s.get('role','')} | {s.get('responsibility','')} | {s.get('impact','High')} |\n"
+    else:
+        users = biz.get("primary_users", ["System Administrators", "End Users"])
+        rows = ""
+        for u in users:
+            rows += f"| {u} | Primary Actor | High |\n"
+        rows += "| Engineering Lead | Architecture & Implementation | High |\n"
+        rows += "| Product Owner | Requirement Validation | High |\n"
+        rows += "| DevOps / SRE | Infrastructure & Operations | Medium |\n"
 
+    users = biz.get("primary_users", ["System Administrators", "End Users"])
     persona_rows = ""
     for i, u in enumerate(users[:3], 1):
-        persona_rows += f"\n#### Persona {i} — {u}\n- Interacts with the system as a primary actor\n- Expects reliable, low-latency responses\n- Requires secure access and data integrity\n"
+        persona_rows += (
+            f"#### Persona {i} — {u}\n"
+            f"- **Role:** Interacts with the system to fulfill business workflows.\n"
+            f"- **Needs:** High availability, data integrity, and intuitive interfaces.\n"
+            f"- **Pain Points:** Complex navigation, slow response times.\n\n"
+        )
 
     return (
         f"## 4. Stakeholders & Personas\n\n"
         f"### 4.1 Stakeholder Matrix\n\n"
         f"| Role | Responsibility | Impact |\n|---|---|---|\n{rows}\n"
-        f"### 4.2 User Personas\n{persona_rows}\n---\n"
+        f"### 4.2 User Personas\n\n{persona_rows}---\n"
     )
-
 
 def _s5_functional_reqs(features: List[Dict], frs: List[Dict]) -> str:
     if not frs:
-        return "## 5. Functional Requirements\n\n_No functional requirements generated._\n\n---\n"
+        return "## 5. Functional Requirements\n\n_No functional requirements detected._\n\n---\n"
 
     lines = [
         "## 5. Functional Requirements\n\n"
-        "_Priority: **M** = Must Have | **S** = Should Have | **C** = Could Have_\n"
+        "Requirements are categorized by their originating architectural feature. Priorities are assigned based on empirical confidence signals.\n"
     ]
 
-    # Group FRs by linked feature
     feat_conf = {f.get("name",""): float(f.get("confidence",0)) for f in features}
+    feat_desc = {f.get("name",""): f.get("description", "") for f in features}
     fr_by_feat: Dict[str, List[Dict]] = {}
+    
     for fr in frs:
         lf = fr.get("linked_feature", fr.get("mapped_feature", "unknown"))
         fr_by_feat.setdefault(lf, []).append(fr)
@@ -214,23 +227,32 @@ def _s5_functional_reqs(features: List[Dict], frs: List[Dict]) -> str:
         display = _display(feat_name)
         conf = feat_conf.get(feat_name, 0.7)
         priority = _moscow(conf)
-        lines.append(f"\n### FR: {display}\n\n**Priority:** {priority} | **Confidence:** {conf:.0%}\n")
+        desc = feat_desc.get(feat_name, "")
+        
+        lines.append(f"\n### 5.x Feature: {display}\n")
+        lines.append(f"**Context:** {desc}\n")
+        
+        fr_table = "| ID | Requirement | Priority | Verification |\n|---|---|---|---|\n"
         for fr in feat_frs:
-            lines.append(f"\n**{fr.get('id','FR-?')}:** {fr.get('description','')}\n")
+            fr_id = fr.get('id', 'FR-?')
+            fr_desc = fr.get('description', '')
+            fr_table += f"| **{fr_id}** | {fr_desc} | {priority} | Automated Test |\n"
+            
             criteria = fr.get("acceptance_criteria", [])
             if criteria:
-                lines.append("**Acceptance Criteria:**\n")
-                for ac in criteria:
-                    lines.append(f"- {ac}")
+                fr_table += f"| | *AC:* {criteria[0]} | | |\n"
+                
+        lines.append(fr_table)
 
-    # REST endpoint mapping table
-    lines.append("\n### Proposed REST Endpoint Mapping\n")
-    lines.append("| Method | Endpoint | Description | Auth Required |")
-    lines.append("|---|---|---|---|")
-    for f in features[:8]:
+    lines.append("\n### Proposed Integration Interfaces\n")
+    lines.append("For modules exposing APIs or remote procedures, the following standard RESTful signatures are recommended:\n")
+    lines.append("| Resource | Method | Endpoint Path | Purpose |\n|---|---|---|---|")
+    
+    resource_feats = [f for f in features if "routing" not in f.get("name", "").lower()]
+    for f in (resource_feats[:8] if resource_feats else features[:8]):
         path = _rest_path(f.get("name","resource"))
-        lines.append(f"| GET | /api/v1{path} | Retrieve {_display(f.get('name',''))} | Yes |")
-        lines.append(f"| POST | /api/v1{path} | Create {_display(f.get('name',''))} | Yes |")
+        lines.append(f"| {_display(f.get('name',''))} | GET | `/api/v1{path}` | Retrieve state/data |")
+        lines.append(f"| {_display(f.get('name',''))} | POST | `/api/v1{path}` | Mutate state/data |")
 
     lines.append("\n---\n")
     return "\n".join(lines)
@@ -238,187 +260,236 @@ def _s5_functional_reqs(features: List[Dict], frs: List[Dict]) -> str:
 
 def _s6_nfrs(nfrs: List[Dict]) -> str:
     if not nfrs:
-        return "## 6. Non-Functional Requirements\n\n_No NFRs generated._\n\n---\n"
+        return "## 6. Non-Functional Requirements\n\n_No NFRs detected._\n\n---\n"
 
     cats: Dict[str, List[Dict]] = {}
     for nfr in nfrs:
-        cat = nfr.get("category", "general").capitalize()
+        cat = nfr.get("category", "General").capitalize()
         cats.setdefault(cat, []).append(nfr)
 
-    lines = ["## 6. Non-Functional Requirements\n"]
-    nfr_table = "| ID | Category | Requirement | Measurable Target |\n|---|---|---|---|\n"
-    for nfr in nfrs:
-        nfr_table += f"| {nfr.get('id','NFR-?')} | {nfr.get('category','').capitalize()} | {nfr.get('description','')} | See acceptance criteria |\n"
-    lines.append(nfr_table)
-
+    lines = [
+        "## 6. Non-Functional Requirements\n\n"
+        "Non-functional constraints dictating system qualities.\n"
+    ]
+    
     for cat, items in sorted(cats.items()):
-        lines.append(f"\n### NFR: {cat}\n")
+        lines.append(f"\n### 6.x {cat} Requirements\n")
+        table = "| ID | Description | Target / SLA |\n|---|---|---|\n"
         for nfr in items:
-            lines.append(f"- **{nfr.get('id','NFR-?')}:** {nfr.get('description','')}")
+            table += f"| **{nfr.get('id','NFR-?')}** | {nfr.get('description','')} | Strict |\n"
+        lines.append(table)
 
     lines.append("\n---\n")
     return "\n".join(lines)
 
 
-def _s7_data_requirements(features: List[Dict]) -> str:
-    has_db = any("database" in f.get("name","").lower() or "data" in f.get("name","").lower() for f in features)
+def _s7_data_requirements(features: List[Dict], tech_stack: List[str], biz: Dict) -> str:
+    artifacts = biz.get("enterprise_artifacts", {})
+    if artifacts and "data_requirements" in artifacts and artifacts["data_requirements"]:
+        rows = ""
+        for r in artifacts["data_requirements"]:
+            rows += f"| {r.get('requirement','')} | {r.get('specification','')} |\n"
+        return (
+            "## 7. Data Requirements\n\n"
+            "### 7.1 Database & Persistence Strategy\n\n"
+            "| Requirement | Specification |\n|---|---|\n"
+            f"{rows}\n\n"
+            "### 7.2 Data Retention & Compliance\n\n"
+            "- **PII Data**: Encrypted at rest (AES-256). Subject to GDPR right-to-erasure workflows.\n"
+            "- **Application Logs**: Hot storage for 30 days, cold archive for 1 year.\n"
+            "- **Secrets**: No secrets or API keys stored in plain text databases.\n\n---\n"
+        )
+        
+    # Fallback deterministic generation
+    has_sql = _has_keyword("sql", tech_stack) or _has_keyword("postgres", tech_stack) or _has_keyword("mysql", tech_stack)
+    has_nosql = _has_keyword("mongo", tech_stack) or _has_keyword("redis", tech_stack)
+    
+    storage_type = "Relational (SQL) and/or Document storage"
+    if has_sql and not has_nosql:
+        storage_type = "Relational (SQL) database schema"
+    elif has_nosql and not has_sql:
+        storage_type = "NoSQL/Document store"
+        
     schema_note = (
-        "Database access layer detected. The following schema modernization changes are recommended:\n\n"
-        "| Change Type | Table / Collection | Description |\n|---|---|---|\n"
-        "| Add Column | All primary tables | `deleted_at` DATETIME NULL — enables soft-delete |\n"
-        "| Add Index | Foreign key columns | Improve JOIN query performance |\n"
-        "| Add Full-Text Index | Searchable text columns | Enable full-text search capability |\n"
-        "| Column Type Update | Text/varchar fields | Align max length with business rules |\n"
-    ) if has_db else (
-        "No direct database access layer detected. Data requirements to be confirmed during discovery.\n"
+        "| Requirement | Specification |\n|---|---|\n"
+        f"| Storage Paradigm | {storage_type} based on tech stack analysis. |\n"
+        "| Data Integrity | ACID compliance for billing/auth; Eventual consistency acceptable for feeds/logs. |\n"
+        "| Backup Strategy | Daily automated snapshots with 30-day retention and point-in-time recovery (PITR). |\n"
+        "| Data Auditing | Append-only audit logs for all mutations to domain entities. |\n"
+        "| Soft Deletion | Records SHALL utilize `deleted_at` timestamps to prevent accidental data loss. |\n"
     )
 
     return (
         "## 7. Data Requirements\n\n"
-        "### 7.1 Database Migration Strategy\n\n"
-        f"{schema_note}\n"
+        "### 7.1 Database & Persistence Strategy\n\n"
+        f"{schema_note}\n\n"
         "### 7.2 Data Retention & Compliance\n\n"
-        "- User PII data: Retain per applicable legal mandate (minimum 7 years where required)\n"
-        "- Application logs: Retain for 90 days in hot storage, 1 year in cold storage\n"
-        "- Deleted records: Soft-delete only; hard-delete only on verified GDPR erasure requests\n"
-        "- Audit logs: Immutable, append-only; retain for 3 years\n\n---\n"
+        "- **PII Data**: Encrypted at rest (AES-256). Subject to GDPR right-to-erasure workflows.\n"
+        "- **Application Logs**: Hot storage for 30 days, cold archive for 1 year.\n"
+        "- **Secrets**: No secrets or API keys stored in plain text databases.\n\n---\n"
     )
 
 
 def _s8_tech_stack(biz: Dict) -> str:
-    ptype = biz.get("product_type", "Software System").lower()
-    is_kotlin = "kotlin" in ptype or "spring" in ptype or "jvm" in ptype
-
-    if is_kotlin:
-        rows = (
-            "| Language | Kotlin 1.x (detected) | Kotlin 2.x |\n"
-            "| Framework | Spring Boot 2.x (detected) | Spring Boot 3.x |\n"
-            "| JVM | Java 8/11 (detected) | Java 21 LTS |\n"
-            "| Build Tool | Gradle (detected) | Gradle 8.x + mavenCentral() |\n"
-            "| Database | MySQL 5.x / current | MySQL 8.x |\n"
-            "| Auth | Embedded auth | Decoupled auth middleware |\n"
-            "| Container | Docker (current) | Docker + Kubernetes (managed) |\n"
-            "| Observability | None detected | OpenTelemetry + Prometheus + Grafana |\n"
+    tech_stack = biz.get("tech_stack", [])
+    
+    if not tech_stack:
+        return (
+            "## 8. Technology Stack (TO-BE)\n\n"
+            "_Technology stack was not explicitly detected. Standard enterprise cloud-native defaults apply._\n\n---\n"
         )
-    else:
-        rows = (
-            "| Language | Current version | Latest stable version |\n"
-            "| Framework | Current version | Latest stable version |\n"
-            "| Build Tool | Current toolchain | Updated toolchain |\n"
-            "| Container | Current config | Docker + Kubernetes |\n"
-            "| Observability | Not detected | OpenTelemetry stack |\n"
-        )
-
+        
+    rows = ""
+    for tech in tech_stack:
+        rows += f"| {tech} | Confirmed | Latest Stable / LTS |\n"
+        
     return (
         "## 8. Technology Stack (TO-BE)\n\n"
-        "| Component | Current (AS-IS) | Target (TO-BE) |\n"
+        "| Component / Technology | Status | Target Version |\n"
         "|---|---|---|\n"
         f"{rows}\n---\n"
     )
 
 
-def _s9_cicd() -> str:
+def _s9_cicd(tech_stack: List[str], biz: Dict) -> str:
+    tool = "Enterprise CI/CD Tool (e.g., GitHub Actions, GitLab CI)"
+    if _has_keyword("github", tech_stack): tool = "GitHub Actions"
+    if _has_keyword("gitlab", tech_stack): tool = "GitLab CI"
+    if _has_keyword("jenkins", tech_stack): tool = "Jenkins"
+    
+    artifacts = biz.get("enterprise_artifacts", {})
+    if artifacts and "cicd_standards" in artifacts and artifacts["cicd_standards"]:
+        rows = ""
+        for r in artifacts["cicd_standards"]:
+            rows += f"| {r.get('id','')} | {r.get('standard','')} |\n"
+    else:
+        rows = (
+            "| CI-01 | All code merged to `main` SHALL pass automated tests and static analysis. |\n"
+            "| CI-02 | Build artifacts SHALL be immutable and uniquely versioned (e.g., Git SHA). |\n"
+            "| CI-03 | Infrastructure provisioning SHALL be fully automated (IaC). |\n"
+            "| CI-04 | Deployment rollback SHALL be executable within 5 minutes. |\n"
+        )
+        
     return (
         "## 9. CI/CD Pipeline Requirements\n\n"
+        f"**Primary Orchestrator:** {tool}\n\n"
         "### 9.1 Pipeline Stages\n\n"
-        "`Code Push` → `Static Analysis` → `Build & Unit Tests` → `Integration Tests` → `Container Build & Scan` → `Deploy Staging` → `Deploy Production`\n\n"
-        "### 9.2 Requirements\n\n"
-        "| ID | Requirement |\n|---|---|\n"
-        "| CICD-01 | Pipeline SHALL run static analysis (linting, SAST) on every pull request |\n"
-        "| CICD-02 | Unit test coverage SHALL meet the minimum gate (≥ 80%) before merge |\n"
-        "| CICD-03 | Container images SHALL be scanned for CVEs; builds with Critical CVEs SHALL fail |\n"
-        "| CICD-04 | All deployments SHALL be immutable; rollback SHALL complete within 5 minutes |\n"
-        "| CICD-05 | Pipeline execution time SHALL not exceed 15 minutes end-to-end |\n\n---\n"
+        "`Commit` → `Lint & SAST` → `Unit Tests` → `Build/Containerize` → `Integration Tests` → `Deploy to Staging` → `Manual Gate` → `Deploy to Prod`\n\n"
+        "### 9.2 Release Standards\n\n"
+        "| ID | Standard |\n|---|---|\n"
+        f"{rows}\n---\n"
     )
 
+def _s10_infra(tech_stack: List[str], biz: Dict) -> str:
+    orchestration = "Managed Kubernetes (EKS / GKE / AKS) or Serverless Containers"
+    if _has_keyword("docker", tech_stack): orchestration = "Docker Containers"
+    if _has_keyword("kubernetes", tech_stack) or _has_keyword("k8s", tech_stack): orchestration = "Kubernetes Cluster"
+    if _has_keyword("serverless", tech_stack) or _has_keyword("lambda", tech_stack): orchestration = "Serverless Functions"
 
-def _s10_infra() -> str:
+    artifacts = biz.get("enterprise_artifacts", {})
+    if artifacts and "infrastructure" in artifacts and artifacts["infrastructure"]:
+        rows = ""
+        for r in artifacts["infrastructure"]:
+            rows += f"| {r.get('aspect','')} | {r.get('specification','')} |\n"
+    else:
+        rows = (
+            "| High Availability | Minimum 2 replicas/instances deployed across multiple availability zones. |\n"
+            "| Auto-scaling | HPA / Auto-scaling groups configured based on CPU/Memory utilization thresholds (target ~70%). |\n"
+            "| Load Balancing | Layer 7 Application Load Balancer with SSL termination. |\n"
+            "| Observability | Centralized logging, distributed tracing, and metric scraping (e.g., OpenTelemetry, Prometheus). |\n"
+            "| Secret Management | Runtime secret injection via Vault or Cloud Secret Manager. |\n"
+        )
+
     return (
         "## 10. Infrastructure Requirements\n\n"
-        "| Resource | Specification |\n|---|---|\n"
-        "| Kubernetes Version | 1.28+ (managed) |\n"
-        "| Min Replicas | 2 (high availability) |\n"
-        "| Max Replicas | 10 (HPA auto-scaling) |\n"
-        "| CPU Request | 250m per pod |\n"
-        "| Memory Request | 512Mi per pod |\n"
-        "| Ingress | HTTPS with TLS 1.2+ termination |\n"
-        "| Health Check | Liveness + Readiness probes required |\n"
-        "| Secret Management | External secrets manager (Vault / K8s Secrets) |\n\n---\n"
+        f"**Target Architecture:** Cloud-Native / {orchestration}\n\n"
+        "| Resource Aspect | Specification |\n|---|---|\n"
+        f"{rows}\n---\n"
     )
 
-
-def _s11_risks(features: List[Dict]) -> str:
-    rows = (
-        "| R-01 | EOL dependency versions in use | High | Critical | Immediate upgrade sprint | Open |\n"
-        "| R-02 | Missing observability stack | Medium | High | Add OpenTelemetry in Phase 2 | Open |\n"
-        "| R-03 | No automated test suite detected | Medium | High | Add unit + integration tests | Open |\n"
-    )
-    r_idx = 4
-    for f in features:
-        conf = float(f.get("confidence", 1))
-        if conf < 0.6:
-            rows += f"| R-{r_idx:02d} | Low-confidence capability: {_display(f.get('name',''))} ({conf:.0%}) | Medium | High | Verify source implementation | Open |\n"
+def _s11_risks(features: List[Dict], biz: Dict) -> str:
+    artifacts = biz.get("enterprise_artifacts", {})
+    if artifacts and "risks" in artifacts and artifacts["risks"]:
+        rows = ""
+        for r in artifacts["risks"]:
+            rows += f"| {r.get('id','')} | {r.get('description','')} | {r.get('probability','Medium')} | {r.get('impact','Medium')} | {r.get('mitigation','')} | Open |\n"
+    else:
+        rows = ""
+        r_idx = 1
+        low_feats = [f for f in features if float(f.get("confidence", 1)) < 0.6]
+        for f in low_feats:
+            rows += f"| R-{r_idx:02d} | Ambiguous Implementation: {_display(f.get('name',''))} | Medium | High | Conduct code-level discovery | Open |\n"
             r_idx += 1
+        rows += f"| R-{r_idx:02d} | Legacy Dependencies | High | Medium | Execute automated vulnerability scans | Open |\n"
+        r_idx += 1
+        rows += f"| R-{r_idx:02d} | Test Coverage Deficiencies | Medium | High | Enforce branch coverage metrics | Open |\n"
 
     return (
         "## 11. Risk Register\n\n"
-        "| ID | Risk | Probability | Impact | Mitigation | Status |\n"
+        "| ID | Risk Description | Probability | Impact | Mitigation Strategy | Status |\n"
         "|---|---|---|---|---|---|\n"
         f"{rows}\n---\n"
     )
 
-
-def _s12_compliance() -> str:
+def _s12_compliance(biz: Dict) -> str:
+    artifacts = biz.get("enterprise_artifacts", {})
+    if artifacts and "compliance" in artifacts and artifacts["compliance"]:
+        rows = ""
+        for r in artifacts["compliance"]:
+            rows += f"| {r.get('domain','')} | {r.get('requirement','')} | {r.get('strategy','')} |\n"
+    else:
+        rows = (
+            "| Data Privacy (GDPR/CCPA) | Protection of Personally Identifiable Information (PII) | Encryption at rest, Data anonymization, Consent tracking. |\n"
+            "| Security (OWASP) | Defense against top web vulnerabilities | SAST/DAST in pipelines, strict input validation, parameterized queries. |\n"
+            "| Auditability | Traceability of administrative actions | Immutable audit logs for all destructive operations. |\n"
+            "| Network Security | Secure data transit | TLS 1.3 enforcement on all external endpoints. |\n"
+        )
+        
     return (
         "## 12. Compliance & Legal Requirements\n\n"
-        "| Regulation | Requirement | Implementation |\n|---|---|---|\n"
-        "| GDPR | Right to erasure for personal data | Soft-delete + hard-delete on verified request |\n"
-        "| GDPR | Data minimization | Collect only necessary PII fields |\n"
-        "| SOC 2 Type II | Audit logging of all privileged actions | Append-only audit trail |\n"
-        "| OWASP Top 10 | Protect against injection, auth flaws | SAST scan in CI/CD pipeline |\n"
-        "| TLS | Encrypt all data in transit | TLS 1.2+ enforced at ingress |\n\n---\n"
+        "| Domain | Requirement | Implementation Strategy |\n|---|---|---|\n"
+        f"{rows}\n---\n"
     )
-
 
 def _s13_acceptance() -> str:
     return (
         "## 13. Acceptance Criteria\n\n"
-        "### 13.1 Functional Acceptance\n\n"
-        "| ID | Criterion | Verification |\n|---|---|---|\n"
-        "| AC-F01 | All FR acceptance criteria pass automated test suite | CI test run |\n"
-        "| AC-F02 | No P0 or P1 defects open at release gate | Bug tracker sign-off |\n"
-        "| AC-F03 | All API endpoints return documented HTTP status codes | Contract test |\n\n"
-        "### 13.2 Non-Functional Acceptance\n\n"
-        "| ID | Criterion | Target |\n|---|---|---|\n"
-        "| AC-NF01 | API p95 response latency | < 500ms under normal load |\n"
-        "| AC-NF02 | Unit + integration test coverage | ≥ 80% line coverage |\n"
-        "| AC-NF03 | Container security scan | 0 Critical CVEs at release |\n"
-        "| AC-NF04 | System uptime | ≥ 99.9% over 30-day rolling window |\n\n---\n"
+        "### 13.1 Delivery Acceptance\n\n"
+        "- **Functional:** 100% of Must-Have Functional Requirements (Section 5) pass QA validation.\n"
+        "- **Non-Functional:** System demonstrates compliance with specified NFR SLAs (Section 6) under load testing.\n"
+        "- **Defects:** Zero P0 (Critical) or P1 (High) defects exist at the time of release candidate branching.\n\n"
+        "### 13.2 Operational Acceptance\n\n"
+        "- CI/CD pipelines successfully deploy the application to a production-like staging environment.\n"
+        "- Application metrics, logs, and alerts are verified in the centralized observability dashboard.\n"
+        "- Disaster recovery (backup restoration) runbook is documented and successfully tested.\n\n---\n"
     )
-
 
 def _s14_roadmap() -> str:
     return (
         "## 14. Delivery Roadmap\n\n"
-        "| Phase | Timeline | Key Deliverables |\n|---|---|---|\n"
-        "| Phase 1 — Foundation & Critical Fixes | Weeks 1–6 | Upgrade EOL deps, fix P0 defects, establish CI/CD pipeline |\n"
-        "| Phase 2 — Observability & Security | Weeks 7–12 | Add OpenTelemetry, security hardening, REST API layer |\n"
-        "| Phase 3 — Hardening & Production Readiness | Weeks 13–16 | Load testing, DR runbooks, final acceptance sign-off |\n\n---\n"
+        "A phased modernization and delivery approach.\n\n"
+        "| Phase | Focus Area | Key Deliverables |\n|---|---|---|\n"
+        "| **Phase 1: Foundation** | Infrastructure & CI/CD | Setup target environment, pipeline automation, and initial code migration. |\n"
+        "| **Phase 2: Core Refactor** | Backend & Data Layer | Address low-confidence modules, optimize data schemas, implement missing FRs. |\n"
+        "| **Phase 3: Hardening** | Security & Observability | Security audits, tracing integration, load testing. |\n"
+        "| **Phase 4: Transition** | Cutover & Go-Live | UAT sign-off, production deployment, legacy deprecation. |\n\n---\n"
     )
 
-
-def _s15_open_issues(biz: Dict, features: List[Dict], frs: List[Dict], nfrs: List[Dict]) -> str:
+def _s15_open_issues(biz: Dict, features: List[Dict]) -> str:
     issues = []
-    users = biz.get("primary_users", [])
-    if "General System Users" in users:
-        issues.append("User roles and access levels are not explicitly defined — requires stakeholder input.")
+    
+    if len(features) < 5:
+        issues.append("Low feature count detected; system boundaries may be incomplete or strictly microservice-scoped.")
+        
     low = sum(1 for f in features if float(f.get("confidence", 1)) < 0.6)
-    if low:
-        issues.append(f"{low} feature(s) carry confidence < 60% — source modules may be incomplete or ambiguous.")
-    if len(nfrs) <= 3:
-        issues.append("Tech stack signals were insufficient — NFRs are based on generic baselines; review with engineering team.")
+    if low > 0:
+        issues.append(f"{low} subsystems generated low confidence signals requiring manual review by lead engineers.")
+        
+    if not biz.get("tech_stack"):
+        issues.append("Technical stack could not be fully resolved; infrastructure assumptions must be validated.")
+        
     if not issues:
-        issues.append("No significant open issues identified. All inputs were well-defined.")
+        issues.append("No immediate technical blockers identified from static analysis.")
 
     rows = "\n".join(f"| OI-{i:02d} | {issue} | Open |" for i, issue in enumerate(issues, 1))
     return (
@@ -427,20 +498,17 @@ def _s15_open_issues(biz: Dict, features: List[Dict], frs: List[Dict], nfrs: Lis
         f"{rows}\n\n---\n"
     )
 
-
 def _s16_approval(today: str) -> str:
     return (
         "## 16. Document Approval\n\n"
-        "The undersigned confirm this Business Requirements Document accurately represents "
-        "the agreed requirements for this modernization initiative.\n\n"
+        "Signatures below indicate acceptance of the requirements outlined in this document.\n\n"
         "| Role | Name | Signature | Date |\n|---|---|---|---|\n"
-        "| Engineering Lead | | | |\n"
+        "| Business Sponsor | | | |\n"
         "| Product Owner | | | |\n"
-        "| DevOps Lead | | | |\n"
-        "| QA Lead | | | |\n\n"
-        f"_Document generated: {today}. Version control maintained in project wiki._\n"
+        "| Engineering Lead | | | |\n"
+        "| Security / Compliance | | | |\n\n"
+        f"_Document generated deterministically via Analyst Agent on {today}._\n"
     )
-
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -453,6 +521,8 @@ def compose_brd(
     non_functional_requirements: List[Dict],
 ) -> str:
     today = date.today().strftime("%B %d, %Y")
+    tech_stack = business_context.get("tech_stack", [])
+    
     sections = [
         _cover(business_context, today),
         _s1_exec_summary(business_context, features),
@@ -461,23 +531,18 @@ def compose_brd(
         _s4_stakeholders(business_context),
         _s5_functional_reqs(features, functional_requirements),
         _s6_nfrs(non_functional_requirements),
-        _s7_data_requirements(features),
+        _s7_data_requirements(features, tech_stack, business_context),
         _s8_tech_stack(business_context),
-        _s9_cicd(),
-        _s10_infra(),
-        _s11_risks(features),
-        _s12_compliance(),
+        _s9_cicd(tech_stack, business_context),
+        _s10_infra(tech_stack, business_context),
+        _s11_risks(features, business_context),
+        _s12_compliance(business_context),
         _s13_acceptance(),
         _s14_roadmap(),
-        _s15_open_issues(business_context, features, functional_requirements, non_functional_requirements),
+        _s15_open_issues(business_context, features),
         _s16_approval(today),
     ]
     return "\n".join(sections)
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="BRDComposer: 16-section enterprise BRD.")

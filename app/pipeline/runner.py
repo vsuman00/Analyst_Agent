@@ -30,25 +30,40 @@ from app.analysis.brd_composer import compose_brd
 from app.analysis.brd_fix_loop import run_fix_loop
 
 # Phase 3.5: LLM Enrichment (optional — skipped gracefully if OPENAI_API_KEY not set)
-def _try_enrich(val_feats_list, prod_dict):
+def _try_enrich(val_feats_list, prod_dict, tech_stack):
     """
-    Attempt LLM enrichment. Returns enriched features and updated business context.
+    Attempt LLM enrichment. Returns enriched features, updated business context, and artifacts.
     Silently skips if OPENAI_API_KEY is not configured.
     """
     import os
+    # Ensure .env is loaded — needed when running via CLI (run_end_to_end)
+    # or if main.py's load_dotenv hasn't run yet.
+    try:
+        from dotenv import load_dotenv
+        _env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+        load_dotenv(dotenv_path=_env_path, override=False)
+    except ImportError:
+        pass
+
     if not os.environ.get("OPENAI_API_KEY"):
         print("[LLM] OPENAI_API_KEY not set — skipping LLM enrichment.")
-        return val_feats_list, prod_dict
+        return val_feats_list, prod_dict, {}
     try:
-        from app.utils.llm_enrichment import enrich_features, enrich_core_value
+        from app.utils.llm_enrichment import enrich_features, enrich_core_value, enrich_enterprise_artifacts
         enriched_feats = enrich_features(val_feats_list)
         core_value     = enrich_core_value(enriched_feats)
         prod_dict      = dict(prod_dict)
         prod_dict["core_value"] = core_value
-        return enriched_feats, prod_dict
+        
+        artifacts = enrich_enterprise_artifacts(
+            business_context={"product_type": prod_dict["product"]["name"]},
+            features=enriched_feats,
+            tech_stack=tech_stack
+        )
+        return enriched_feats, prod_dict, artifacts
     except Exception as e:
         print(f"[LLM] Enrichment failed, continuing with deterministic output. Error: {e}")
-        return val_feats_list, prod_dict
+        return val_feats_list, prod_dict, {}
 
 
 def log_stage(stage_num: str, name: str, status: str = "STARTED"):
@@ -63,17 +78,22 @@ def log_stage(stage_num: str, name: str, status: str = "STARTED"):
 def run_end_to_end(repo_url: str, output_dir: str):
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
-    dest_repo_dir = out_path / "runner_repo"
+
+    # Derive a repo-specific clone directory so each repo is isolated
+    repo_name = repo_url.rstrip("/").split("/")[-1].replace(".git", "")
+    dest_repo_dir = out_path / f"runner_{repo_name}"
 
     print("\n==================================================")
     print(f"🚀 INITIATING DETERMINISTIC BRD PIPELINE")
     print(f"📦 Target: {repo_url}")
+    print(f"📁 Clone Dir: {dest_repo_dir}")
     print("==================================================")
 
     try:
         # ─── PHASE 1: CONTEXT EXTRACTION ─────────────────────────────────────
         log_stage("1", "RepoScanner")
-        scan_data = scan_repository(repo_url, str(dest_repo_dir), skip_clone=True)
+        # skip_clone=False ensures we always clone the repo fresh
+        scan_data = scan_repository(repo_url, str(dest_repo_dir), skip_clone=False)
         if "error" in scan_data:
             raise RuntimeError(f"RepoScanner failed: {scan_data['error']}")
         log_stage("1", "RepoScanner", f"SUCCESS (Found {len(scan_data.get('files', []))} files)")
@@ -102,28 +122,44 @@ def run_end_to_end(repo_url: str, output_dir: str):
         log_stage("6", "FeatureValidator")
         feat_val_result = validate_features(raw_feats["features"])
         val_feats = feat_val_result.model_dump()
-        log_stage("6", "FeatureValidator", f"SUCCESS ({len(val_feats['validated_features'])} validated features)")
+        val_feats_list = val_feats["validated_features"]
+        log_stage("6", "FeatureValidator", f"SUCCESS ({len(val_feats_list)} validated features)")
+
+        # ─── PHASE 2.5: PRUNE HALLUCINATIONS ───────────────────────────────
+        log_stage("6.5", "Semantic Feature Pruning (LLM)")
+        import os
+        if os.environ.get("OPENAI_API_KEY"):
+            from app.utils.llm_enrichment import prune_hallucinated_features
+            repo_ctx = ", ".join([m["name"] for m in norm_modules[:5]])
+            pruned_feats = prune_hallucinated_features(val_feats_list, repo_ctx)
+            val_feats["validated_features"] = pruned_feats
+            log_stage("6.5", "Semantic Feature Pruning (LLM)", f"SUCCESS ({len(pruned_feats)} features remain)")
+        else:
+            log_stage("6.5", "Semantic Feature Pruning (LLM)", "SKIPPED (No API Key)")
+
+        val_feats_list = val_feats["validated_features"]
 
         log_stage("7", "ProductUnderstandingAgent")
-        prod_result = understand_product(val_feats["validated_features"])
+        prod_result = understand_product(val_feats_list)
         prod_dict = prod_result.model_dump()
         log_stage("7", "ProductUnderstandingAgent", f"SUCCESS (Archetype: {prod_dict['product']['name']})")
 
         # ─── PHASE 3: REQUIREMENT GENERATION ─────────────────────────────────
         log_stage("8", "FunctionalRequirementGenerator")
-        fr_result = generate_requirements(val_feats["validated_features"])
+        fr_result = generate_requirements(val_feats_list)
         fr_dict = fr_result.model_dump()
         log_stage("8", "FunctionalRequirementGenerator", f"SUCCESS ({len(fr_dict['functional_requirements'])} FRs)")
 
         log_stage("9", "NonFunctionalRequirementGenerator")
         system_type = prod_dict['product']['name']
-        nfr_result = generate_nfrs(system_type=system_type, tech_stack=[])
+        tech_stack_nfr = scan_data.get("tech_stack", [])
+        nfr_result = generate_nfrs(system_type=system_type, tech_stack=tech_stack_nfr)
         nfr_dict = nfr_result.model_dump()
         log_stage("9", "NonFunctionalRequirementGenerator", f"SUCCESS ({len(nfr_dict['non_functional_requirements'])} NFRs)")
 
         # ─── PHASE 3.5: LLM ENRICHMENT ───────────────────────────────────
-        enriched_feat_list, prod_dict = _try_enrich(
-            val_feats["validated_features"], prod_dict
+        enriched_feat_list, prod_dict, artifacts = _try_enrich(
+            val_feats_list, prod_dict, tech_stack_nfr
         )
         val_feats["validated_features"] = enriched_feat_list
 
@@ -131,7 +167,7 @@ def run_end_to_end(repo_url: str, output_dir: str):
         # FIX (Bug 1.3): Call BusinessUnderstandingAgent explicitly so
         # compose_brd() receives product_type, primary_users, core_value.
         biz_result = understand_business(
-            val_feats["validated_features"],
+            enriched_feat_list,
             system_type=prod_dict['product']['name']
         )
         biz_ctx = biz_result.model_dump()["business_context"]
@@ -139,18 +175,25 @@ def run_end_to_end(repo_url: str, output_dir: str):
         biz_ctx["product_summary"] = prod_dict["product"].get("summary", "")
         biz_ctx["core_capabilities"] = prod_dict["product"].get("core_capabilities", [])
         biz_ctx["repo_name"] = scan_data.get("repo_name", "Unknown Repository")
+        biz_ctx["tech_stack"] = tech_stack_nfr
+        biz_ctx["enterprise_artifacts"] = artifacts
 
         # ─── PHASE 4: COMPOSITION & VALIDATION ───────────────────────────────
         log_stage("10", "BRDComposer & FixLoop")
         # FIX (Bug 1.1): Pass correct keyword argument names matching compose_brd() signature.
         initial_markdown = compose_brd(
             business_context=biz_ctx,
-            features=val_feats["validated_features"],
+            features=enriched_feat_list,
             functional_requirements=fr_dict["functional_requirements"],
             non_functional_requirements=nfr_dict["non_functional_requirements"],
         )
         
-        loop_result = run_fix_loop(initial_markdown, max_iterations=2)
+        loop_result = run_fix_loop(
+            initial_markdown,
+            max_iterations=2,
+            features=enriched_feat_list,
+            functional_requirements=fr_dict["functional_requirements"],
+        )
         final_markdown = loop_result["final_markdown"]
         final_val = loop_result["final_validation"]
         
@@ -164,7 +207,8 @@ def run_end_to_end(repo_url: str, output_dir: str):
                 print(f"   - {issue}")
 
         # ─── OUTPUT ─────────────────────────────────────────────────────────
-        brd_out_path = out_path / "Target_BRD.md"
+        # Use a repo-specific filename so successive runs don't overwrite each other
+        brd_out_path = out_path / f"BRD_{repo_name}.md"
         with open(brd_out_path, "w", encoding="utf-8") as f:
             f.write(final_markdown)
 
@@ -181,34 +225,30 @@ def run_end_to_end(repo_url: str, output_dir: str):
         print("==================================================\n")
         sys.exit(1)
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run the full Analyst-Agent pipeline to generate a BRD.")
-    parser.add_argument("repo_url", help="URL of the target GitHub repository")
-    parser.add_argument("--outdir", default="runtime/pipeline_out", help="Directory to store outputs")
-    args = parser.parse_args()
-
-    run_end_to_end(args.repo_url, args.outdir)
-
 def run_pipeline(repo_url: str, output_path: str = None) -> dict:
-    from app.eca.repo_scanner import scan_repository
-    from app.eca.file_classifier import run_classifier
-    from app.eca.content_processor import run_content_processor
-    from app.context.aggregator import aggregate_context
-    from app.context.normalizer import normalize_context
+    """
+    Phase 1 pipeline: clone → scan → classify → chunk → aggregate → normalize → validate.
+    Returns the canonical final payload dict consumed by analyze-and-convert.
+    All imports are already at module level; no redundant local imports needed.
+    """
     from app.context.validator import validate_context
     from app.output.final_output_builder import build_final_output
-    from pathlib import Path
 
     out_dir = output_path if output_path else "runtime/pipeline_out"
     out_path_obj = Path(out_dir)
     out_path_obj.mkdir(parents=True, exist_ok=True)
-    dest_repo_dir = out_path_obj / "runner_repo"
 
+    # Derive a unique, repo-specific clone directory so runs never cross-contaminate
+    repo_name = repo_url.rstrip("/").split("/")[-1].replace(".git", "")
+    dest_repo_dir = out_path_obj / f"runner_{repo_name}"
+
+    # Always clone fresh — never reuse a stale directory from a previous run
     scan_data = scan_repository(repo_url, str(dest_repo_dir), skip_clone=False)
     if "error" in scan_data:
         raise RuntimeError(f"RepoScanner failed: {scan_data['error']}")
 
     classified_data = run_classifier(scan_data)
+    # Pass the actual cloned repo dir so content_processor reads the right files
     chunks_data = run_content_processor(classified_data, dest_repo_dir)
 
     aggregated_data = aggregate_context(chunks_data)
@@ -224,3 +264,13 @@ def run_pipeline(repo_url: str, output_path: str = None) -> dict:
         validation_data
     )
     return final_payload
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run the full Analyst-Agent pipeline to generate a BRD.")
+    parser.add_argument("repo_url", help="URL of the target GitHub repository")
+    parser.add_argument("--outdir", default="runtime/pipeline_out", help="Directory to store outputs")
+    args = parser.parse_args()
+
+    run_end_to_end(args.repo_url, args.outdir)
+
