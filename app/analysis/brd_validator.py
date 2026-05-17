@@ -202,6 +202,174 @@ def _score_clarity(brd: str) -> Tuple[float, List[str]]:
 
 
 # ---------------------------------------------------------------------------
+# NEW: Deep Quality Checks
+# ---------------------------------------------------------------------------
+
+# Verbs that indicate a testable FR (SHALL-style language)
+_TESTABLE_VERBS = re.compile(
+    r'\b(shall|must|will|ensures?|validates?|rejects?|returns?|generates?|creates?|'
+    r'authenticates?|authorizes?|logs?|records?|exposes?|accepts?|routes?)\b',
+    re.IGNORECASE,
+)
+
+# Patterns indicating placeholder / unfinished NFR targets
+_PLACEHOLDER_SLA_RE = re.compile(
+    r'\b(strict|tbd|to be defined|to be determined|n/a|unspecified|pending)\b',
+    re.IGNORECASE,
+)
+
+# Generic stakeholder names that indicate no real inference
+_GENERIC_STAKEHOLDERS = {"end user", "end users", "admin", "administrator", "user", "users"}
+
+
+def _score_fr_testability(brd: str) -> Tuple[float, List[str]]:
+    """
+    Check that FR descriptions contain testable verbs (SHALL, MUST, validates, etc.).
+    Scans all lines containing FR-N identifiers.
+    """
+    issues = []
+    fr_lines = [line for line in brd.split("\n") if FR_ID_PATTERN.search(line)]
+    if not fr_lines:
+        return 1.0, []
+
+    testable_count = 0
+    for line in fr_lines:
+        if _TESTABLE_VERBS.search(line):
+            testable_count += 1
+        else:
+            fr_id_match = FR_ID_PATTERN.search(line)
+            if fr_id_match:
+                issues.append(
+                    f"{fr_id_match.group()} does not contain a testable verb "
+                    "(SHALL, MUST, validates, returns, etc.). Requirement may not be verifiable."
+                )
+
+    score = testable_count / len(fr_lines) if fr_lines else 1.0
+    return round(score, 4), issues
+
+
+def _score_nfr_specificity(brd: str) -> Tuple[float, List[str]]:
+    """
+    Check that NFR SLA targets contain actual measurable values,
+    not placeholders like 'Strict', 'TBD', or 'N/A'.
+    """
+    issues = []
+    nfr_lines = [line for line in brd.split("\n") if NFR_ID_PATTERN.search(line)]
+    if not nfr_lines:
+        return 1.0, []
+
+    placeholder_count = 0
+    for line in nfr_lines:
+        if _PLACEHOLDER_SLA_RE.search(line):
+            nfr_id_match = NFR_ID_PATTERN.search(line)
+            nfr_id = nfr_id_match.group() if nfr_id_match else "NFR-?"
+            issues.append(
+                f"{nfr_id} contains a placeholder SLA target ('Strict', 'TBD', etc.). "
+                "Replace with a measurable value (e.g., '99.9% uptime', 'p99 < 200ms')."
+            )
+            placeholder_count += 1
+
+    score = max(0.0, 1.0 - (placeholder_count / max(len(nfr_lines), 1)))
+    return round(score, 4), issues
+
+
+def _score_stakeholder_specificity(brd: str) -> Tuple[float, List[str]]:
+    """
+    Check that the Stakeholders section contains project-specific roles,
+    not just generic 'End User' or 'Admin'.
+    """
+    issues = []
+
+    # Extract stakeholder section content
+    stakeholder_start = brd.find("## 4. Stakeholders")
+    if stakeholder_start < 0:
+        return 1.0, []  # Section missing — scored separately by completeness
+
+    # Find the next section boundary
+    next_section = brd.find("\n## ", stakeholder_start + 10)
+    section_text = brd[stakeholder_start:next_section] if next_section > 0 else brd[stakeholder_start:]
+    section_lower = section_text.lower()
+
+    # Count how many table rows exist (lines starting with |)
+    table_rows = [line for line in section_text.split("\n")
+                  if line.strip().startswith("|") and "---" not in line and "Role" not in line]
+
+    if not table_rows:
+        issues.append("Stakeholder section contains no stakeholder entries.")
+        return 0.5, issues
+
+    # Check if ALL roles are generic
+    generic_only = True
+    for row in table_rows:
+        row_lower = row.lower()
+        cells = [c.strip().lower() for c in row_lower.split("|") if c.strip()]
+        if cells:
+            role = cells[0]
+            if role not in _GENERIC_STAKEHOLDERS:
+                generic_only = False
+                break
+
+    if generic_only:
+        issues.append(
+            "Stakeholder section contains only generic roles ('End User', 'Admin'). "
+            "Stakeholders should be project-specific (e.g., 'Billing Manager', 'Security Officer')."
+        )
+        return 0.6, issues
+
+    return 1.0, issues
+
+
+def _score_section_depth(brd: str) -> Tuple[float, List[str]]:
+    """
+    Check that each required section has meaningful content (≥ 30 words).
+    Also checks that the Executive Summary has ≥ 60 words.
+    """
+    issues = []
+    sections_checked = 0
+    sections_adequate = 0
+
+    for i, heading in enumerate(REQUIRED_SECTIONS):
+        start = brd.find(heading)
+        if start < 0:
+            continue  # Missing section — scored by completeness
+
+        # Find the end of this section (next heading or EOF)
+        end = len(brd)
+        for next_heading in REQUIRED_SECTIONS[i + 1:]:
+            next_pos = brd.find(next_heading)
+            if next_pos > start:
+                end = next_pos
+                break
+
+        section_body = brd[start + len(heading):end].strip()
+        word_count = len(section_body.split())
+
+        sections_checked += 1
+
+        # Executive Summary gets a higher bar
+        if "Executive Summary" in heading:
+            if word_count < 60:
+                issues.append(
+                    f"Executive Summary is too shallow ({word_count} words). "
+                    "Should be ≥ 60 words with project-specific content."
+                )
+            else:
+                sections_adequate += 1
+        else:
+            if word_count < 30:
+                short_name = heading.replace("## ", "")
+                issues.append(
+                    f"Section '{short_name}' has insufficient content ({word_count} words). "
+                    "Should be ≥ 30 words."
+                )
+            else:
+                sections_adequate += 1
+
+    score = sections_adequate / max(sections_checked, 1)
+    return round(score, 4), issues
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -211,23 +379,47 @@ def validate_brd(
     functional_requirements: List[Dict],
 ) -> BRDValidationResult:
     """
-    Run all four scoring dimensions and return an aggregated result.
+    Run all scoring dimensions and return an aggregated result.
+
+    Dimensions (8 total, equal weight):
+      1. Completeness    — all required section headings present
+      2. Traceability    — every input feature/FR referenced in the BRD
+      3. No-Hallucination — no phantom FR-IDs in the BRD
+      4. Clarity         — no banned vague phrases
+      5. FR Testability  — FRs contain testable verbs (SHALL, MUST, etc.)
+      6. NFR Specificity — NFR SLAs have real values, not 'Strict'/'TBD'
+      7. Stakeholder Specificity — roles are project-specific, not generic
+      8. Section Depth   — every section has meaningful content (word count)
     """
     all_issues: List[str] = []
 
+    # Original 4 dimensions
     completeness_score,    completeness_issues    = _score_completeness(brd_markdown)
     traceability_score,    traceability_issues    = _score_traceability(brd_markdown, features, functional_requirements)
     no_halluc_score,       no_halluc_issues       = _score_no_hallucination(brd_markdown, features, functional_requirements)
     clarity_score,         clarity_issues         = _score_clarity(brd_markdown)
 
+    # New 4 dimensions
+    fr_test_score,         fr_test_issues         = _score_fr_testability(brd_markdown)
+    nfr_spec_score,        nfr_spec_issues        = _score_nfr_specificity(brd_markdown)
+    stakeholder_score,     stakeholder_issues     = _score_stakeholder_specificity(brd_markdown)
+    depth_score,           depth_issues           = _score_section_depth(brd_markdown)
+
     all_issues.extend(completeness_issues)
     all_issues.extend(traceability_issues)
     all_issues.extend(no_halluc_issues)
     all_issues.extend(clarity_issues)
+    all_issues.extend(fr_test_issues)
+    all_issues.extend(nfr_spec_issues)
+    all_issues.extend(stakeholder_issues)
+    all_issues.extend(depth_issues)
 
-    # Equal-weight average across all four dimensions
+    # Equal-weight average across all 8 dimensions
     aggregate_score = round(
-        (completeness_score + traceability_score + no_halluc_score + clarity_score) / 4,
+        (
+            completeness_score + traceability_score + no_halluc_score + clarity_score
+            + fr_test_score + nfr_spec_score + stakeholder_score + depth_score
+        ) / 8,
         4
     )
 

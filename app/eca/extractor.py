@@ -3,11 +3,11 @@ import json
 import argparse
 from typing import Dict, Any, List
 from app.schemas.models import ECAOutput, ClassifiedFiles, FileChunk
+from app.eca.language_loader import get_role
 
-FRONTEND_EXTS = {".js", ".jsx", ".ts", ".tsx", ".html", ".css", ".scss", ".vue"}
-BACKEND_EXTS = {".py", ".java", ".go", ".rb", ".php", ".cs", ".rs", ".cpp", ".c"}
-CONFIG_EXTS = {".json", ".yaml", ".yml", ".toml", ".ini", ".env", ".xml", ".cfg"}
-DOCS_EXTS = {".md", ".txt", ".rst"}
+# NOTE: Extension-to-role mapping is now fully driven by the language registry.
+# To add support for a new language, edit: app/eca/config/language_registry.json
+# No Python changes are required.
 
 def is_text_file(filepath: str) -> bool:
     try:
@@ -41,16 +41,17 @@ def build_file_tree(startpath: str) -> Dict[str, Any]:
     return tree
 
 def classify_file(filename: str, classified: ClassifiedFiles):
+    """Classify a file by consulting the language registry."""
     _, ext = os.path.splitext(filename)
-    ext = ext.lower()
-    
-    if ext in FRONTEND_EXTS:
+    role = get_role(ext)
+
+    if role == "frontend":
         classified.frontend.append(filename)
-    elif ext in BACKEND_EXTS:
+    elif role == "backend":
         classified.backend.append(filename)
-    elif ext in CONFIG_EXTS:
+    elif role == "config":
         classified.config.append(filename)
-    elif ext in DOCS_EXTS:
+    elif role == "docs":
         classified.docs.append(filename)
     else:
         classified.unknown.append(filename)

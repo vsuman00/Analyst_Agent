@@ -59,12 +59,26 @@ from __future__ import annotations
 
 import json
 import argparse
+import os
 import sys
 import re
 from pathlib import Path
-from typing import Dict, List, Set, Tuple, Any
+from typing import Dict, List, Set, Tuple, Any, Optional
 
 from app.schemas.models import ProductProfile, ProductUnderstandingResult
+
+# Attempt to load the LLM client (optional — falls back to keyword voting if absent)
+try:
+    from dotenv import load_dotenv
+    _env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+    load_dotenv(dotenv_path=_env_path, override=False)
+except ImportError:
+    pass
+
+try:
+    from app.utils.llm_client import llm_json_call as _llm_json_call
+except ImportError:
+    _llm_json_call = None  # type: ignore
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -72,41 +86,11 @@ from app.schemas.models import ProductProfile, ProductUnderstandingResult
 
 CAPABILITY_THRESHOLD: float = 0.7
 
-# Domain signal clusters → (archetype_snake, archetype_display, description_fragment)
-# Each cluster is a set of snake_case feature name substrings.
-# A feature "votes" for a cluster if any cluster keyword appears in its name.
-DOMAIN_SIGNALS: Dict[str, Dict] = {
-    "social_platform": {
-        "keywords": {"social", "feed", "follow", "friend", "tweet", "post", "content", "notification"},
-        "display":  "Social Platform",
-        "fragment": "social networking and content-sharing platform",
-    },
-    "api_backend_service": {
-        "keywords": {"rest_api", "routing", "grpc", "protocol_buffer", "endpoint", "controller"},
-        "display":  "API Backend Service",
-        "fragment": "backend API service exposing structured endpoints",
-    },
-    "data_platform": {
-        "keywords": {"database", "data_access", "search", "query", "etl", "pipeline"},
-        "display":  "Data Platform",
-        "fragment": "data management and query platform",
-    },
-    "auth_service": {
-        "keywords": {"authentication", "auth", "credential", "token", "session", "identity"},
-        "display":  "Authentication Service",
-        "fragment": "authentication and credential management service",
-    },
-    "e_commerce": {
-        "keywords": {"payment", "cart", "checkout", "billing", "product", "order"},
-        "display":  "E-Commerce System",
-        "fragment": "e-commerce and payment processing system",
-    },
-    "devops_toolchain": {
-        "keywords": {"ci_cd", "container", "orchestration", "deployment", "build", "pipeline"},
-        "display":  "DevOps Toolchain",
-        "fragment": "DevOps and deployment automation toolchain",
-    },
-}
+# ---------------------------------------------------------------------------
+# Archetype domain signals — loaded from app/analysis/config/archetype_registry.json
+# To add a new archetype, edit that JSON file. Zero Python changes required.
+# ---------------------------------------------------------------------------
+from app.analysis.archetype_loader import get_domain_signals
 
 # Infrastructure/testing feature name substrings — reported separately in summary
 INFRA_SIGNALS: Set[str] = {"container", "ci_cd", "test", "deploy", "docker", "kubernetes"}
@@ -193,24 +177,26 @@ def _trim_to_words(text: str, max_words: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Step A — Detect product archetype from feature names
+# Step A — Detect product archetype from feature names (FALLBACK only)
 # ---------------------------------------------------------------------------
 
 def _detect_archetype(features: List[Dict]) -> Tuple[str, str, str]:
     """
-    Vote across DOMAIN_SIGNALS clusters using feature names.
+    FALLBACK: Vote across archetype_registry.json clusters using feature names.
+    Used only when LLM archetype detection is unavailable or fails.
 
     Returns (archetype_snake, archetype_display, fragment) for winner.
     Falls back to ("software_system", "Software System", "multi-capability software system")
-    if no cluster scores ≥ 2 votes.
+    if no cluster scores >= 2 votes.
     """
-    scores: Dict[str, Dict] = {k: {"votes": 0, "conf_sum": 0.0} for k in DOMAIN_SIGNALS}
+    domain_signals = get_domain_signals()   # loaded from archetype_registry.json
+    scores: Dict[str, Dict] = {k: {"votes": 0, "conf_sum": 0.0} for k in domain_signals}
 
     for feat in features:
         feat_name: str = feat["name"]       # already snake_case
         feat_conf: float = feat.get("confidence", 0.0)
 
-        for cluster, spec in DOMAIN_SIGNALS.items():
+        for cluster, spec in domain_signals.items():
             for kw in spec["keywords"]:
                 if kw in feat_name:
                     scores[cluster]["votes"] += 1
@@ -231,7 +217,7 @@ def _detect_archetype(features: List[Dict]) -> Tuple[str, str, str]:
             "multi-capability software system",
         )
 
-    spec = DOMAIN_SIGNALS[cluster_name]
+    spec = domain_signals[cluster_name]
     return cluster_name, spec["display"], spec["fragment"]
 
 
@@ -314,27 +300,98 @@ def _build_summary(
 
 
 # ---------------------------------------------------------------------------
+# LLM Archetype Detection (PRIMARY PATH — dynamic, universal)
+# ---------------------------------------------------------------------------
+
+_ARCHETYPE_SYSTEM_PROMPT = """\
+You are a senior product analyst. Given a list of software features and optional product documentation,
+your task is to identify the PRODUCT ARCHETYPE of this application.
+
+Rules:
+- Infer the archetype from the features and documentation ONLY. Do not make assumptions.
+- Use a concise, specific archetype label (e.g. "AI-Powered Resume Analysis Tool", not "Software System").
+- The product_name must be snake_case (e.g. "ai_resume_checker", "weather_dashboard").
+- The summary must be <= 100 words in plain English, describing what the product does for its users.
+- core_capabilities must be Title Case, user-facing feature names (not technical component names).
+- Valid archetypes include, but are not limited to:
+    Web App, Mobile App, Desktop Application, CLI Tool, API Backend Service,
+    Data Pipeline, Library/SDK, Demo/Sample App.
+- If the README or features mention MDI, RibbonBar, DataWindow, PowerBuilder, toolbar,
+  dialog, or similar desktop-GUI terms, classify as "Desktop Application" or
+  "Desktop UI Demo" — NOT as a Data Platform or Web App.
+- If the repo is explicitly described as a demo, example, or sample project in the
+  README, reflect that in the archetype_display (e.g. "Desktop UI Demo").
+
+Return ONLY valid JSON:
+{
+  "product_name": "snake_case_identifier",
+  "archetype_display": "Human-Readable Product Type",
+  "core_capabilities": ["Feature One", "Feature Two", "Feature Three"],
+  "summary": "Plain English summary of what the product does (<= 100 words)"
+}
+"""
+
+
+def _llm_detect_archetype(
+    validated_features: List[Dict],
+    repo_context: Optional[Dict] = None,
+) -> Optional[Dict]:
+    """
+    PRIMARY: Use LLM to dynamically detect product archetype from features + README.
+    Returns None on any failure so caller falls back to DOMAIN_SIGNALS keyword voting.
+    """
+    if not _llm_json_call or not os.environ.get("OPENAI_API_KEY"):
+        return None
+
+    feature_list = [
+        {
+            "name": f.get("name", ""),
+            "description": f.get("description", ""),
+            "confidence": f.get("confidence", 0.0),
+        }
+        for f in validated_features
+    ]
+
+    readme_excerpt = ""
+    if repo_context:
+        signals = repo_context.get("intent_signals", {})
+        readme_excerpt = signals.get("readme", "")[:2000].strip()
+
+    user_prompt = (
+        f"Product Documentation (primary signal):\n{readme_excerpt or '[Not available]'}\n\n"
+        f"Detected Features:\n{json.dumps(feature_list, indent=2)}\n\n"
+        "Identify the product archetype and return the JSON response."
+    )
+
+    try:
+        result = _llm_json_call(_ARCHETYPE_SYSTEM_PROMPT, user_prompt, max_tokens=500)
+        if all(k in result for k in ["product_name", "archetype_display", "summary", "core_capabilities"]):
+            print(f"[ProductUnderstanding] LLM archetype: '{result['archetype_display']}'")
+            return result
+        return None
+    except Exception as e:
+        print(f"[ProductUnderstanding] LLM archetype detection failed, using keyword fallback: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def understand_product(validated_features: List[Dict]) -> ProductUnderstandingResult:
+def understand_product(
+    validated_features: List[Dict],
+    repo_context: Optional[Dict] = None,
+) -> ProductUnderstandingResult:
     """
-    Derive a ProductProfile purely from validated feature data.
+    Derive a ProductProfile from validated feature data.
+
+    PRIMARY PATH : LLM call for fully dynamic, universal archetype detection.
+    FALLBACK PATH: DOMAIN_SIGNALS keyword voting (deterministic, no API key needed).
 
     Parameters
     ----------
     validated_features : list of ValidatedFeature dicts
-        [{ "id", "name", "description", "confidence", "merge_of" }]
-
-    Returns
-    -------
-    ProductUnderstandingResult
-        { "product": { "name", "summary", "core_capabilities" } }
-
-    Invariants:
-      - Every string in output is derived from input feature names or descriptions
-      - No external domain knowledge or LLM calls
-      - summary ≤ 120 words (hard enforced)
+    repo_context : optional RepoContext dict from RepoContextBuilder
     """
     if not validated_features:
         return ProductUnderstandingResult(
@@ -345,11 +402,24 @@ def understand_product(validated_features: List[Dict]) -> ProductUnderstandingRe
             )
         )
 
+    # ── PRIMARY: LLM dynamic archetype detection ─────────────────────────────
+    llm_result = _llm_detect_archetype(validated_features, repo_context)
+    if llm_result:
+        summary = _trim_to_words(llm_result.get("summary", ""), 120)
+        return ProductUnderstandingResult(
+            product=ProductProfile(
+                name=llm_result["product_name"],
+                summary=summary,
+                core_capabilities=llm_result.get("core_capabilities", []),
+            )
+        )
+
+    # ── FALLBACK: Keyword voting ────────────────────────────────────────
+    print("[ProductUnderstanding] Using DOMAIN_SIGNALS keyword voting fallback.")
     archetype_snake, archetype_display, fragment = _detect_archetype(validated_features)
     capabilities = _derive_capabilities(validated_features)
     summary = _build_summary(archetype_display, fragment, validated_features, capabilities)
 
-    # Hard-enforce 120-word cap (safety net)
     assert _word_count(summary) <= 120, (
         f"Summary exceeded 120 words ({_word_count(summary)}): {summary}"
     )

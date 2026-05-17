@@ -12,8 +12,9 @@ The pipeline uses a multi-layered, 10-stage state-machine architecture to ensure
 ```
 GitHub Repo URL
     → [1] RepoScanner         — clone & file tree
-    → [2] FileClassifier      — categorize source files
+    → [2] FileClassifier      — categorize source files (driven by language_registry.json)
     → [3] ContentProcessor    — chunk & extract content
+    → [3.1] Sub-Extractors    — API, Entity, Dependency, Defect signal extraction
     → [4] ContextAggregator & Normalizer
     → [5] FeatureExtractionAgent
     → [6] FeatureValidator
@@ -134,9 +135,24 @@ Enriches three specific outputs before BRD composition:
 ## Pipeline Stages (Detailed)
 
 ### Stage 1: ECA — Extract, Classify, Aggregate
-- **RepoScanner**: Clones the target repository into an isolated `runner_<repo_name>/` subdirectory.
-- **FileClassifier**: Classifies files into `frontend`, `backend`, `config`, `docs`, `unknown`.
+- **RepoScanner**: Clones the target repository into an isolated `runner_<repo_name>/` subdirectory. Binary detection and ignored directories are driven by `language_registry.json`.
+- **FileClassifier**: Classifies files into `frontend`, `backend`, `config`, `docs`, `unknown` using the language registry.
 - **ContentProcessor**: Reads and chunks file content, respecting token budgets.
+- **Sub-Extractors** (run in parallel against content chunks):
+  - `api_extractor.py` — Detects API route definitions and endpoint patterns.
+  - `entity_extractor.py` — Identifies domain entities and data models.
+  - `dependency_extractor.py` — Parses dependency manifests (`package.json`, `requirements.txt`, `pom.xml`, etc.).
+  - `defect_extractor.py` — Scans for TODO/FIXME/HACK markers as quality signals.
+  - `extractor.py` — Orchestrates all sub-extractors into a unified extraction result.
+
+### Stage 1.1: Language Registry (`app/eca/config/language_registry.json`)
+The `language_registry.json` is the **single source of truth** for all language knowledge. It governs:
+- File extension → language name mapping
+- Language role classification (`frontend`, `backend`, `config`, `docs`)
+- Binary and ignored-directory skip lists
+- Known application entry-points and build-file names
+
+The `language_loader.py` module exposes a pure-read, LRU-cached API over the registry. **No language facts are hardcoded anywhere in the tool layer.**
 
 ### Stage 2: Context Intelligence
 - **ContextAggregator**: Combines scan data, classified files, and content chunks.
@@ -155,15 +171,36 @@ Enriches three specific outputs before BRD composition:
 ### Stage 3.5: LLM Enrichment *(requires OPENAI_API_KEY)*
 - Enrich feature descriptions and core value via OpenAI (JSON mode, `temperature=0`).
 - Generate enterprise artifact sections (Data Strategy, Infrastructure, Risk Register).
+- Managed by `app/analysis/brd_enrichment_agent.py`.
 
 ### Stage 4: BRD Composition & Validation
-- **BRDComposer** — Assembles all structured inputs into a comprehensive enterprise BRD in Markdown.
-- **BRDValidator** — Scores completeness, traceability, no-hallucination, and clarity (threshold: 0.85).
+- **BRDComposer** — Assembles all structured inputs into a comprehensive enterprise BRD in Markdown (16 required sections).
+- **BRDValidator** — Scores the BRD across **8 dimensions** (threshold: 0.85). See [BRD Validation](#brd-validation) below.
 - **BRDFixLoop** — Applies up to 2 deterministic repair passes if score < 0.85.
 
 ### Stage 5: Export
 - **DocumentGenerator** — Converts the final BRD Markdown to a professional `.docx` file.
 - Output saved to: `runtime/pipeline_out/BRD_<repo_name>.md`
+
+---
+
+## BRD Validation
+
+The `BRDValidator` scores every generated BRD across **8 equal-weight dimensions** (0.0–1.0 each). The aggregate threshold for passing is **0.85**.
+
+| # | Dimension | What is Checked |
+|---|---|---|
+| 1 | **Completeness** | All 16 required section headings are present |
+| 2 | **Traceability** | Every input feature name and FR-ID appears in the BRD |
+| 3 | **No-Hallucination** | BRD references no FR-IDs absent from the input set |
+| 4 | **Clarity** | No banned vague phrases (e.g., "seamlessly", "world-class") |
+| 5 | **FR Testability** | FR descriptions contain testable verbs (SHALL, MUST, validates, etc.) |
+| 6 | **NFR Specificity** | NFR SLA targets contain real measurable values, not placeholders (TBD, Strict) |
+| 7 | **Stakeholder Specificity** | Stakeholder roles are project-specific, not generic ("End User", "Admin") |
+| 8 | **Section Depth** | Every section has meaningful content (≥30 words; Executive Summary ≥60 words) |
+
+**Required BRD Sections (16 total):**
+1. Executive Summary · 2. Business Context · 3. Current State Analysis · 4. Stakeholders · 5. Functional Requirements · 6. Non-Functional Requirements · 7. Data Requirements · 8. Technology Stack · 9. CI/CD Pipeline · 10. Infrastructure · 11. Risk Register · 12. Compliance · 13. Acceptance Criteria · 14. Delivery Roadmap · 15. Open Issues · 16. Document Approval
 
 ---
 
@@ -187,7 +224,7 @@ Enriches three specific outputs before BRD composition:
 | `POST` | `/generate-requirements` | Run `FunctionalRequirementGenerator` |
 | `POST` | `/generate-nfrs` | Run `NonFunctionalRequirementGenerator` |
 | `POST` | `/compose-brd` | Run `BRDComposer` |
-| `POST` | `/validate-brd` | Run `BRDValidator` |
+| `POST` | `/validate-brd` | Run `BRDValidator` (8-dimension scoring) |
 | `POST` | `/fix-brd` | Run `BRDFixLoop` |
 
 ### Download
@@ -217,9 +254,17 @@ Analyst-Agent/
 │   ├── pipeline/
 │   │   └── runner.py                       # Master orchestrator (run_pipeline + run_end_to_end)
 │   ├── eca/                                # Stage 1: Extract, Classify, Aggregate
-│   │   ├── repo_scanner.py
-│   │   ├── file_classifier.py
-│   │   └── content_processor.py
+│   │   ├── repo_scanner.py                 # Clone & file-tree scan
+│   │   ├── file_classifier.py              # Extension → role classification
+│   │   ├── content_processor.py            # Chunked file content reader
+│   │   ├── language_loader.py              # Pure-read API over language_registry.json (LRU-cached)
+│   │   ├── extractor.py                    # Sub-extractor orchestrator
+│   │   ├── api_extractor.py                # Detects API routes / endpoint patterns
+│   │   ├── entity_extractor.py             # Identifies domain entities & data models
+│   │   ├── dependency_extractor.py         # Parses dependency manifests
+│   │   ├── defect_extractor.py             # Scans TODO/FIXME/HACK quality markers
+│   │   └── config/
+│   │       └── language_registry.json      # Single source of truth for all language knowledge
 │   ├── context/                            # Stage 2: Context Intelligence
 │   │   ├── aggregator.py
 │   │   ├── normalizer.py
@@ -234,27 +279,31 @@ Analyst-Agent/
 │   │   ├── non_functional_requirement_generator.py
 │   │   ├── payload_converter.py            # Converts payload → MinimalBRD struct
 │   │   ├── brd_composer.py
-│   │   ├── brd_validator.py
+│   │   ├── brd_enrichment_agent.py         # LLM enrichment orchestrator (Phase 3.5)
+│   │   ├── brd_validator.py                # 8-dimension BRD quality scorer
 │   │   ├── brd_fix_loop.py                 # Self-annealing repair loop (max 2 passes)
-│   │   └── document_generator.py          # Markdown → .docx export
+│   │   ├── fix_loop.py                     # Low-level fix helpers
+│   │   └── document_generator.py           # Markdown → .docx export
 │   ├── utils/
-│   │   ├── llm_client.py                  # OpenAI API wrapper (retry, JSON mode)
-│   │   └── llm_enrichment.py              # LLM enrichment + hallucination pruning
+│   │   ├── llm_client.py                   # OpenAI API wrapper (retry, JSON mode)
+│   │   └── llm_enrichment.py               # LLM enrichment + hallucination pruning
 │   ├── output/
-│   │   └── final_output_builder.py        # Canonical payload builder
-│   ├── schemas/                            # Pydantic models and data contracts
-│   └── tests/                             # Deterministic test cases
+│   │   └── final_output_builder.py         # Canonical payload builder
+│   ├── schemas/
+│   │   └── models.py                       # Pydantic models and data contracts
+│   ├── validation/                         # Validation utilities
+│   └── tests/                              # Deterministic test cases
 ├── architecture/
-│   ├── pipeline_sop.md                    # Pipeline Standard Operating Procedure
-│   ├── technical_overview.md              # Technical architecture overview
-│   └── BRD.md                             # Sample generated BRD
+│   ├── pipeline_sop.md                     # Pipeline Standard Operating Procedure
+│   ├── technical_overview.md               # Technical architecture overview
+│   └── BRD.md                              # Sample generated BRD
 ├── runtime/
-│   └── pipeline_out/                      # All generated BRD artifacts (.md, .docx)
+│   └── pipeline_out/                       # All generated BRD artifacts (.md, .docx)
 ├── static/
-│   └── index.html                         # Frontend UI
-├── .env.example                           # Environment variable template
+│   └── index.html                          # Frontend UI
+├── .env.example                            # Environment variable template
 ├── requirements.txt
-└── gemini.md                              # Project Constitution & Behavioral Rules
+└── GEMINI.md                               # Project Constitution & Behavioral Rules
 ```
 
 ---
@@ -301,6 +350,7 @@ Analyst-Agent/
 | Missing `README` in target repo | System infers purpose from code structure and file signals. |
 | BRD score < 0.85 | `BRDFixLoop` applies up to 2 deterministic repair passes (Self-Annealing). |
 | RepoScanner failure | Raises `RuntimeError` immediately with the scanner's error message. |
+| Unknown file extension | `language_loader.py` returns `"unknown"` role; file is still processed as plain text. |
 
 ---
 
@@ -309,6 +359,7 @@ Analyst-Agent/
 1. **Reliability First** — Deterministic pipeline always produces a valid BRD. LLM is optional enrichment.
 2. **Data-First** — JSON Schemas are defined before code. All inter-stage outputs are Pydantic-validated.
 3. **No Hallucination** — LLM prompts supply full structured context. `temperature=0`. Outputs semantically pruned.
-4. **Absolute Traceability** — Every feature maps to evidence. Every FR maps to a validated feature. `BRDValidator` enforces this.
+4. **Absolute Traceability** — Every feature maps to evidence. Every FR maps to a validated feature. `BRDValidator` enforces this across 8 scoring dimensions.
 5. **Repository Isolation** — Each run clones into a unique `runner_<repo_name>/` directory. Successive runs never cross-contaminate.
 6. **Self-Annealing** — On error or low-quality BRD: Analyze → Patch → Test → Update architecture SOP.
+7. **Zero Hardcoded Language Facts** — All language, extension, and role knowledge lives in `language_registry.json`. Adding support for a new language requires only a JSON entry.

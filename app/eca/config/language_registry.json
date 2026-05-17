@@ -1,0 +1,476 @@
+{
+  "_comment": "Language Registry v1.0 — Add any new language here. Zero Python changes required.",
+  "version": "1.0",
+
+  "ignore_dirs": [
+    "node_modules", ".git", "dist", "build", "__pycache__",
+    ".venv", "venv", ".env", ".idea", ".vscode",
+    "target", "out", "bin", "obj", ".gradle", ".mvn",
+    "vendor", "Pods", ".dart_tool", ".pub-cache",
+    "coverage", ".nyc_output", ".pytest_cache", "htmlcov"
+  ],
+
+  "universal_binary_extensions": [
+    ".exe", ".dll", ".so", ".dylib", ".bin", ".out",
+    ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".bmp", ".tiff", ".svg",
+    ".pdf", ".zip", ".tar", ".gz", ".7z", ".rar", ".bz2", ".xz",
+    ".mp3", ".mp4", ".avi", ".mov", ".wav", ".ogg", ".flac",
+    ".pyc", ".pyo", ".pyd", ".class", ".o", ".a",
+    ".woff", ".woff2", ".eot", ".ttf", ".otf",
+    ".db", ".sqlite", ".sqlite3",
+    ".lock"
+  ],
+
+  "universal_config_extensions": [
+    ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
+    ".env", ".xml", ".properties"
+  ],
+
+  "universal_doc_extensions": [
+    ".md", ".txt", ".rst", ".adoc", ".asciidoc",
+    ".tex", ".latex", ".rtf"
+  ],
+
+  "languages": {
+
+    "python": {
+      "extensions": [".py", ".pyw", ".pyi"],
+      "role": "backend",
+      "entry_points": ["main.py", "app.py", "manage.py", "wsgi.py", "asgi.py", "server.py", "run.py"],
+      "build_files": ["requirements.txt", "Pipfile", "pyproject.toml", "setup.py", "setup.cfg", "poetry.lock"],
+      "binary": false,
+      "notes": "CPython, PyPy"
+    },
+
+    "javascript": {
+      "extensions": [".js", ".mjs", ".cjs"],
+      "role": "frontend",
+      "entry_points": ["index.js", "app.js", "server.js", "main.js"],
+      "build_files": ["package.json", "yarn.lock", "package-lock.json"],
+      "binary": false,
+      "notes": "Node.js, browser JS"
+    },
+
+    "typescript": {
+      "extensions": [".ts"],
+      "role": "frontend",
+      "entry_points": ["index.ts", "app.ts", "main.ts", "server.ts"],
+      "build_files": ["tsconfig.json", "package.json"],
+      "binary": false,
+      "notes": "Transpiles to JavaScript"
+    },
+
+    "jsx": {
+      "extensions": [".jsx"],
+      "role": "frontend",
+      "entry_points": ["index.jsx", "app.jsx", "main.jsx"],
+      "build_files": ["package.json"],
+      "binary": false,
+      "notes": "React JSX"
+    },
+
+    "tsx": {
+      "extensions": [".tsx"],
+      "role": "frontend",
+      "entry_points": ["index.tsx", "app.tsx", "main.tsx"],
+      "build_files": ["tsconfig.json"],
+      "binary": false,
+      "notes": "React TSX"
+    },
+
+    "vue": {
+      "extensions": [".vue"],
+      "role": "frontend",
+      "entry_points": ["app.vue", "App.vue"],
+      "build_files": ["package.json", "vue.config.js"],
+      "binary": false,
+      "notes": "Vue Single File Components"
+    },
+
+    "svelte": {
+      "extensions": [".svelte"],
+      "role": "frontend",
+      "entry_points": ["app.svelte", "App.svelte"],
+      "build_files": ["svelte.config.js", "package.json"],
+      "binary": false,
+      "notes": "Svelte framework"
+    },
+
+    "html": {
+      "extensions": [".html", ".htm", ".xhtml"],
+      "role": "frontend",
+      "entry_points": ["index.html", "index.htm"],
+      "build_files": [],
+      "binary": false
+    },
+
+    "css": {
+      "extensions": [".css", ".scss", ".sass", ".less", ".styl"],
+      "role": "frontend",
+      "entry_points": [],
+      "build_files": [],
+      "binary": false,
+      "notes": "CSS and preprocessors"
+    },
+
+    "java": {
+      "extensions": [".java"],
+      "role": "backend",
+      "entry_points": ["Main.java", "Application.java", "App.java"],
+      "build_files": ["pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle"],
+      "binary": false,
+      "notes": "Java SE/EE, Spring, Android"
+    },
+
+    "kotlin": {
+      "extensions": [".kt", ".kts"],
+      "role": "backend",
+      "entry_points": ["Main.kt", "Application.kt", "App.kt"],
+      "build_files": ["build.gradle.kts", "settings.gradle.kts"],
+      "binary": false,
+      "notes": "JVM + Android"
+    },
+
+    "csharp": {
+      "extensions": [".cs"],
+      "role": "backend",
+      "entry_points": ["Program.cs", "Startup.cs", "Main.cs"],
+      "build_files": [".csproj", ".sln", ".nuspec", "packages.config"],
+      "binary": false,
+      "notes": ".NET Framework, .NET Core, Mono"
+    },
+
+    "vbnet": {
+      "extensions": [".vb"],
+      "role": "backend",
+      "entry_points": [],
+      "build_files": [".vbproj", ".sln"],
+      "binary": false,
+      "notes": "VB.NET (.NET)"
+    },
+
+    "vb6": {
+      "extensions": [".bas", ".cls", ".frm", ".ctl", ".res", ".dsr"],
+      "role": "backend",
+      "entry_points": [],
+      "build_files": [".vbp", ".vbg"],
+      "binary": false,
+      "notes": "Visual Basic 6 — Legacy COM-era Windows desktop development"
+    },
+
+    "fsharp": {
+      "extensions": [".fs", ".fsx", ".fsi"],
+      "role": "backend",
+      "entry_points": ["Program.fs", "Main.fs"],
+      "build_files": [".fsproj"],
+      "binary": false,
+      "notes": "F# functional language on .NET"
+    },
+
+    "go": {
+      "extensions": [".go"],
+      "role": "backend",
+      "entry_points": ["main.go"],
+      "build_files": ["go.mod", "go.sum", "Makefile"],
+      "binary": false,
+      "notes": "Go (Golang)"
+    },
+
+    "rust": {
+      "extensions": [".rs"],
+      "role": "backend",
+      "entry_points": ["main.rs", "lib.rs"],
+      "build_files": ["Cargo.toml", "Cargo.lock"],
+      "binary": false,
+      "notes": "Rust system programming"
+    },
+
+    "cpp": {
+      "extensions": [".cpp", ".cxx", ".cc", ".c++", ".hxx", ".hpp"],
+      "role": "backend",
+      "entry_points": ["main.cpp", "main.cxx", "main.cc"],
+      "build_files": ["CMakeLists.txt", "Makefile", "configure", "meson.build"],
+      "binary": false,
+      "notes": "C++ OOP systems language"
+    },
+
+    "c": {
+      "extensions": [".c", ".h"],
+      "role": "backend",
+      "entry_points": ["main.c"],
+      "build_files": ["CMakeLists.txt", "Makefile", "configure"],
+      "binary": false,
+      "notes": "C systems language"
+    },
+
+    "swift": {
+      "extensions": [".swift"],
+      "role": "frontend",
+      "entry_points": ["main.swift", "AppDelegate.swift", "App.swift", "ContentView.swift"],
+      "build_files": ["Package.swift", "Podfile", "Cartfile"],
+      "binary": false,
+      "notes": "Apple ecosystem: iOS, macOS, watchOS, tvOS"
+    },
+
+    "objective_c": {
+      "extensions": [".m", ".mm"],
+      "role": "frontend",
+      "entry_points": ["main.m", "AppDelegate.m"],
+      "build_files": ["Podfile", "Cartfile"],
+      "binary": false,
+      "notes": "Legacy Apple platform language"
+    },
+
+    "ruby": {
+      "extensions": [".rb", ".rake", ".gemspec"],
+      "role": "backend",
+      "entry_points": ["config.ru", "app.rb", "main.rb", "application.rb"],
+      "build_files": ["Gemfile", "Gemfile.lock", "Rakefile"],
+      "binary": false,
+      "notes": "Ruby — Rails, Sinatra"
+    },
+
+    "php": {
+      "extensions": [".php", ".phtml", ".php3", ".php4", ".php5"],
+      "role": "backend",
+      "entry_points": ["index.php", "app.php"],
+      "build_files": ["composer.json", "composer.lock"],
+      "binary": false,
+      "notes": "PHP server-side scripting"
+    },
+
+    "scala": {
+      "extensions": [".scala", ".sc"],
+      "role": "backend",
+      "entry_points": ["Main.scala", "App.scala"],
+      "build_files": ["build.sbt", "project/build.properties"],
+      "binary": false,
+      "notes": "JVM functional + OOP — Spark, Akka"
+    },
+
+    "dart": {
+      "extensions": [".dart"],
+      "role": "frontend",
+      "entry_points": ["main.dart", "app.dart"],
+      "build_files": ["pubspec.yaml", "pubspec.lock"],
+      "binary": false,
+      "notes": "Flutter/Dart for mobile and web"
+    },
+
+    "elixir": {
+      "extensions": [".ex", ".exs"],
+      "role": "backend",
+      "entry_points": ["application.ex", "endpoint.ex"],
+      "build_files": ["mix.exs", "mix.lock"],
+      "binary": false,
+      "notes": "Elixir — Phoenix framework, BEAM VM"
+    },
+
+    "erlang": {
+      "extensions": [".erl", ".hrl"],
+      "role": "backend",
+      "entry_points": [],
+      "build_files": ["rebar.config", "rebar3"],
+      "binary": false,
+      "notes": "Erlang — BEAM, distributed systems"
+    },
+
+    "haskell": {
+      "extensions": [".hs", ".lhs"],
+      "role": "backend",
+      "entry_points": ["Main.hs"],
+      "build_files": ["stack.yaml", "cabal.project", "package.yaml"],
+      "binary": false,
+      "notes": "Haskell functional programming"
+    },
+
+    "cobol": {
+      "extensions": [".cbl", ".cob", ".cpy", ".cobol", ".cob74", ".cob85"],
+      "role": "backend",
+      "entry_points": [],
+      "build_files": [],
+      "binary": false,
+      "notes": "COBOL — Banking, mainframe, enterprise legacy"
+    },
+
+    "powerbuilder": {
+      "extensions": [".pbl", ".pbd", ".pbw", ".pbt", ".srd", ".srf", ".srw", ".sra"],
+      "role": "backend",
+      "entry_points": [],
+      "build_files": [".pbw", ".pbt"],
+      "binary": false,
+      "notes": "PowerBuilder — Sybase/SAP rapid enterprise client-server development"
+    },
+
+    "abap": {
+      "extensions": [".abap", ".prog.abap", ".clas.abap"],
+      "role": "backend",
+      "entry_points": [],
+      "build_files": [],
+      "binary": false,
+      "notes": "ABAP — SAP business application programming language"
+    },
+
+    "fortran": {
+      "extensions": [".f", ".f77", ".f90", ".f95", ".f03", ".for", ".ftn"],
+      "role": "backend",
+      "entry_points": [],
+      "build_files": [],
+      "binary": false,
+      "notes": "FORTRAN — Scientific and HPC computing"
+    },
+
+    "pascal": {
+      "extensions": [".pas", ".pp", ".dpr", ".dpk"],
+      "role": "backend",
+      "entry_points": [],
+      "build_files": [".dproj"],
+      "binary": false,
+      "notes": "Pascal / Delphi — legacy Windows GUI apps"
+    },
+
+    "lua": {
+      "extensions": [".lua"],
+      "role": "backend",
+      "entry_points": ["main.lua", "init.lua"],
+      "build_files": ["rockspec"],
+      "binary": false,
+      "notes": "Lua — embedded scripting, game mods, nginx"
+    },
+
+    "r": {
+      "extensions": [".r", ".R", ".rmd", ".Rmd"],
+      "role": "backend",
+      "entry_points": [],
+      "build_files": ["DESCRIPTION", "NAMESPACE"],
+      "binary": false,
+      "notes": "R — Statistical computing and data science"
+    },
+
+    "julia": {
+      "extensions": [".jl"],
+      "role": "backend",
+      "entry_points": ["main.jl"],
+      "build_files": ["Project.toml", "Manifest.toml"],
+      "binary": false,
+      "notes": "Julia — high-performance scientific computing"
+    },
+
+    "matlab": {
+      "extensions": [".m"],
+      "role": "backend",
+      "entry_points": [],
+      "build_files": [],
+      "binary": false,
+      "notes": "MATLAB — Note: .m clashes with Objective-C; path context resolves ambiguity"
+    },
+
+    "sql": {
+      "extensions": [".sql", ".ddl", ".dml", ".prc", ".sp", ".fnc"],
+      "role": "backend",
+      "entry_points": [],
+      "build_files": [],
+      "binary": false,
+      "notes": "SQL — Relational DB schemas, stored procedures"
+    },
+
+    "shell": {
+      "extensions": [".sh", ".bash", ".zsh", ".fish", ".ksh", ".csh"],
+      "role": "backend",
+      "entry_points": [],
+      "build_files": [],
+      "binary": false,
+      "notes": "Shell scripting"
+    },
+
+    "powershell": {
+      "extensions": [".ps1", ".psm1", ".psd1"],
+      "role": "backend",
+      "entry_points": [],
+      "build_files": [],
+      "binary": false,
+      "notes": "Windows PowerShell / pwsh"
+    },
+
+    "perl": {
+      "extensions": [".pl", ".pm", ".pod"],
+      "role": "backend",
+      "entry_points": [],
+      "build_files": ["Makefile.PL", "Build.PL", "cpanfile"],
+      "binary": false,
+      "notes": "Perl — text processing, CGI legacy"
+    },
+
+    "groovy": {
+      "extensions": [".groovy", ".gvy", ".gy", ".gsh"],
+      "role": "backend",
+      "entry_points": [],
+      "build_files": ["build.gradle"],
+      "binary": false,
+      "notes": "Groovy — JVM scripting, Gradle DSL, Jenkins pipelines"
+    },
+
+    "clojure": {
+      "extensions": [".clj", ".cljs", ".cljc", ".edn"],
+      "role": "backend",
+      "entry_points": [],
+      "build_files": ["project.clj", "deps.edn"],
+      "binary": false,
+      "notes": "Clojure — LISP on JVM"
+    },
+
+    "terraform": {
+      "extensions": [".tf", ".tfvars"],
+      "role": "backend",
+      "entry_points": ["main.tf"],
+      "build_files": [],
+      "binary": false,
+      "notes": "Terraform IaC"
+    },
+
+    "dockerfile": {
+      "extensions": [],
+      "role": "config",
+      "entry_points": ["Dockerfile", "docker-compose.yml", "docker-compose.yaml"],
+      "build_files": [],
+      "binary": false,
+      "notes": "Docker container definitions"
+    },
+
+    "graphql": {
+      "extensions": [".graphql", ".gql"],
+      "role": "backend",
+      "entry_points": [],
+      "build_files": [],
+      "binary": false,
+      "notes": "GraphQL schema and query files"
+    },
+
+    "proto": {
+      "extensions": [".proto"],
+      "role": "backend",
+      "entry_points": [],
+      "build_files": [],
+      "binary": false,
+      "notes": "Protocol Buffers — gRPC interface definitions"
+    },
+
+    "jupyter": {
+      "extensions": [".ipynb"],
+      "role": "backend",
+      "entry_points": [],
+      "build_files": [],
+      "binary": false,
+      "notes": "Jupyter notebooks — data science"
+    },
+
+    "assembly": {
+      "extensions": [".asm", ".s", ".nasm", ".masm"],
+      "role": "backend",
+      "entry_points": [],
+      "build_files": [],
+      "binary": false,
+      "notes": "Assembly language — low-level systems"
+    }
+  }
+}

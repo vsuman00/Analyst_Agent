@@ -1,0 +1,90 @@
+{
+  "_comment": "Archetype Registry v1.0 — Add new domains here. Zero Python changes required.",
+  "version": "1.0",
+
+  "archetypes": {
+
+    "social_platform": {
+      "keywords": ["social", "feed", "follow", "friend", "tweet", "post", "content", "notification"],
+      "display": "Social Platform",
+      "fragment": "social networking and content-sharing platform"
+    },
+
+    "api_backend_service": {
+      "keywords": ["rest_api", "routing", "grpc", "protocol_buffer", "endpoint", "controller"],
+      "display": "API Backend Service",
+      "fragment": "backend API service exposing structured endpoints"
+    },
+
+    "data_platform": {
+      "keywords": ["database", "data_access", "search", "query", "etl", "pipeline"],
+      "display": "Data Platform",
+      "fragment": "data management and query platform"
+    },
+
+    "auth_service": {
+      "keywords": ["authentication", "auth", "credential", "token", "session", "identity"],
+      "display": "Authentication Service",
+      "fragment": "authentication and credential management service"
+    },
+
+    "e_commerce": {
+      "keywords": ["payment", "cart", "checkout", "billing", "product", "order"],
+      "display": "E-Commerce System",
+      "fragment": "e-commerce and payment processing system"
+    },
+
+    "devops_toolchain": {
+      "keywords": ["ci_cd", "container", "orchestration", "deployment", "build", "pipeline"],
+      "display": "DevOps Toolchain",
+      "fragment": "DevOps and deployment automation toolchain"
+    },
+
+    "desktop_ui_app": {
+      "keywords": [
+        "ribbon", "mdi", "theme", "window", "control",
+        "datawindow", "powerserver", "largebutton",
+        "toolbar", "menubar", "dialog", "form", "widget"
+      ],
+      "display": "Desktop UI Application",
+      "fragment": "desktop rich-client application with a graphical user interface"
+    },
+
+    "ml_ai_platform": {
+      "keywords": ["model", "inference", "training", "embedding", "prediction", "classifier", "llm", "prompt"],
+      "display": "ML / AI Platform",
+      "fragment": "machine learning and AI-powered analytical platform"
+    },
+
+    "mobile_app": {
+      "keywords": ["screen", "navigation", "gesture", "push_notification", "offline", "biometric"],
+      "display": "Mobile Application",
+      "fragment": "cross-platform mobile application"
+    },
+
+    "iot_edge": {
+      "keywords": ["sensor", "telemetry", "firmware", "mqtt", "edge", "device", "gateway"],
+      "display": "IoT / Edge Platform",
+      "fragment": "Internet-of-Things edge computing platform"
+    },
+
+    "reporting_analytics": {
+      "keywords": ["report", "dashboard", "chart", "kpi", "metric", "analytics", "visualisation", "visualization"],
+      "display": "Reporting & Analytics Tool",
+      "fragment": "business intelligence and reporting analytics tool"
+    },
+
+    "cms_content": {
+      "keywords": ["article", "media", "slug", "publish", "draft", "cms", "blog", "rich_text"],
+      "display": "Content Management System",
+      "fragment": "content management and publishing platform"
+    },
+
+    "erp_enterprise": {
+      "keywords": ["invoice", "ledger", "procurement", "inventory", "payroll", "hr", "erp", "crm"],
+      "display": "Enterprise Resource Planning (ERP)",
+      "fragment": "enterprise resource planning and business process management system"
+    }
+
+  }
+}

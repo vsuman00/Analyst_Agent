@@ -60,60 +60,78 @@ def _cover(biz: Dict, today: str) -> str:
     )
 
 def _s1_exec_summary(biz: Dict, features: List[Dict]) -> str:
+    # Use LLM-enriched executive summary if available
+    enriched = biz.get("enriched_exec_summary", "")
+    if enriched:
+        return f"## 1. Executive Summary\n\n{enriched}\n\n---\n"
+
+    # Deterministic fallback
     ptype = biz.get("product_type", "Software System")
     core_value = biz.get("core_value", "Provides core system functionality and data management.")
     summary = biz.get("product_summary", "A modern enterprise application.")
     caps = biz.get("core_capabilities", [])
-    
     high_feats = [f for f in features if float(f.get("confidence", 0)) >= 0.8]
-    low_feats = [f for f in features if float(f.get("confidence", 0)) < 0.6]
+    low_feats  = [f for f in features if float(f.get("confidence", 0)) < 0.6]
 
-    caps_str = ", ".join(caps) if caps else "General operations, Data processing, and User management"
-
-    exec_summary = (
+    out = (
         f"## 1. Executive Summary\n\n"
         f"This Business Requirements Document (BRD) specifies the functional, non-functional, and technical "
         f"requirements for the **{ptype}**. Based on comprehensive static analysis, the system encompasses "
-        f"**{len(features)} functional domains**, of which **{len(high_feats)}** have been identified as high-confidence core capabilities. "
-        f"{core_value}\n\n"
+        f"**{len(features)} functional domains**, of which **{len(high_feats)}** have been identified as "
+        f"high-confidence core capabilities. {core_value}\n\n"
         f"**System Overview:**\n{summary}\n\n"
-        f"**Core Capabilities:**\n- " + "\n- ".join(caps if caps else ["Core system functionality"]) + "\n\n"
+        f"**Core Capabilities:**\n- " + "\n- ".join(caps or ["Core system functionality"]) + "\n\n"
     )
-
     if low_feats:
-        exec_summary += (
-            "**Areas Requiring Review:**\n"
-            "The following modules exhibited low confidence during static analysis and may require further architectural discovery:\n"
-        )
+        out += "**Areas Requiring Review:**\n"
         for f in low_feats[:3]:
-            exec_summary += f"- **{_display(f.get('name',''))}**: {f.get('description', 'Requires review.')}\n"
-
-    exec_summary += "\n---\n"
-    return exec_summary
+            out += f"- **{_display(f.get('name',''))}**: {f.get('description', 'Requires review.')}\n"
+    out += "\n---\n"
+    return out
 
 
 def _s2_business_context(biz: Dict, features: List[Dict]) -> str:
-    ptype = biz.get("product_type", "Software System")
-    high_feats = [_display(f.get("name","")) for f in features if float(f.get("confidence",0)) >= 0.8]
+    # Use LLM-enriched content when available
+    problem_stmt = biz.get("enriched_problem_statement", "")
+    enriched_goals = biz.get("enriched_goals", [])
+    enriched_in  = biz.get("enriched_in_scope", [])
+    enriched_out = biz.get("enriched_out_of_scope", [])
 
-    in_scope = "\n".join(f"- {c}" for c in (high_feats or ["Core application functionality", "Data persistence", "API routing"])[:8])
-    out_scope = (
-        "- Legacy system data migration (unless explicitly scripted)\n"
-        "- Third-party vendor platform modifications\n"
-        "- End-user hardware provisioning\n"
-    )
-    
-    problem_stmt = "The current system requires formal specification and modernization to ensure scalability, maintainability, and alignment with enterprise architecture standards."
+    if not problem_stmt:
+        problem_stmt = "The current system requires formal specification and modernization to ensure scalability, maintainability, and alignment with enterprise architecture standards."
 
-    goals_rows = "| G-01 | Architecture Modernization | Ensure all components align with current target architecture |\n"
-    goals_rows += "| G-02 | Code Quality & Coverage | Achieve >80% automated test coverage across core modules |\n"
-    
-    if _has_keyword("auth", [f.get("name","") for f in features]):
-        goals_rows += "| G-03 | Security Hardening | Secure authentication and authorization boundaries |\n"
+    # Goals table
+    if enriched_goals:
+        goals_rows = "".join(
+            f"| {g.get('id','G-?')} | {g.get('goal','')} | {g.get('success_metric','')} |\n"
+            for g in enriched_goals
+        )
     else:
-        goals_rows += "| G-03 | Performance Optimization | Ensure response times meet enterprise SLAs |\n"
-        
-    goals_rows += "| G-04 | CI/CD Automation | Establish zero-touch deployment pipelines |\n"
+        ptype = biz.get("product_type", "Software System")
+        goals_rows = "| G-01 | Architecture Modernization | Ensure all components align with current target architecture |\n"
+        goals_rows += "| G-02 | Code Quality & Coverage | Achieve >80% automated test coverage across core modules |\n"
+        goals_rows += (
+            "| G-03 | Security Hardening | Secure authentication and authorization boundaries |\n"
+            if _has_keyword("auth", [f.get("name","") for f in features])
+            else "| G-03 | Performance Optimization | Ensure response times meet enterprise SLAs |\n"
+        )
+        goals_rows += "| G-04 | CI/CD Automation | Establish zero-touch deployment pipelines |\n"
+
+    # Scope
+    if enriched_in:
+        in_scope = "\n".join(f"- {i}" for i in enriched_in)
+    else:
+        high_feats = [_display(f.get("name","")) for f in features if float(f.get("confidence",0)) >= 0.8]
+        in_scope = "\n".join(f"- {c}" for c in (high_feats or ["Core application functionality", "Data persistence", "API routing"])[:8])
+
+    if enriched_out:
+        out_scope = "\n".join(f"- {o}" for o in enriched_out)
+    else:
+        out_scope = (
+            "- Legacy system data migration (unless explicitly scripted)\n"
+            "- Third-party vendor platform modifications\n"
+            "- End-user hardware provisioning"
+        )
 
     return (
         f"## 2. Business Context & Objectives\n\n"
@@ -175,29 +193,47 @@ def _s3_current_state(biz: Dict, features: List[Dict]) -> str:
 
 
 def _s4_stakeholders(biz: Dict) -> str:
+    # Priority: enriched → enterprise_artifacts → deterministic fallback
+    enriched_stakes = biz.get("enriched_stakeholders", [])
+    enriched_personas = biz.get("enriched_personas", [])
+
     artifacts = biz.get("enterprise_artifacts", {})
-    if artifacts and "stakeholders" in artifacts and artifacts["stakeholders"]:
-        rows = ""
-        for s in artifacts["stakeholders"]:
-            rows += f"| {s.get('role','')} | {s.get('responsibility','')} | {s.get('impact','High')} |\n"
+    artifact_stakes = artifacts.get("stakeholders", []) if artifacts else []
+
+    stake_source = enriched_stakes or artifact_stakes
+    if stake_source:
+        rows = "".join(
+            f"| {s.get('role','')} | {s.get('responsibility','')} | {s.get('impact','High')} |\n"
+            for s in stake_source
+        )
     else:
         users = biz.get("primary_users", ["System Administrators", "End Users"])
-        rows = ""
-        for u in users:
-            rows += f"| {u} | Primary Actor | High |\n"
+        rows = "".join(f"| {u} | Primary Actor | High |\n" for u in users)
         rows += "| Engineering Lead | Architecture & Implementation | High |\n"
         rows += "| Product Owner | Requirement Validation | High |\n"
         rows += "| DevOps / SRE | Infrastructure & Operations | Medium |\n"
 
-    users = biz.get("primary_users", ["System Administrators", "End Users"])
-    persona_rows = ""
-    for i, u in enumerate(users[:3], 1):
-        persona_rows += (
-            f"#### Persona {i} — {u}\n"
-            f"- **Role:** Interacts with the system to fulfill business workflows.\n"
-            f"- **Needs:** High availability, data integrity, and intuitive interfaces.\n"
-            f"- **Pain Points:** Complex navigation, slow response times.\n\n"
-        )
+    # Personas
+    if enriched_personas:
+        persona_rows = ""
+        for i, p in enumerate(enriched_personas[:4], 1):
+            persona_rows += (
+                f"#### Persona {i} — {p.get('name', 'Stakeholder')}\n"
+                f"- **Goal:** {p.get('goal', 'N/A')}\n"
+                f"- **Pain Point:** {p.get('pain_point', 'N/A')}\n"
+                f"- **Technical Literacy:** {p.get('technical_literacy', 'Medium')}\n"
+                f"- **Needs from System:** {p.get('needs', 'N/A')}\n\n"
+            )
+    else:
+        users = biz.get("primary_users", ["System Administrators", "End Users"])
+        persona_rows = ""
+        for i, u in enumerate(users[:3], 1):
+            persona_rows += (
+                f"#### Persona {i} — {u}\n"
+                f"- **Role:** Interacts with the system to fulfill business workflows.\n"
+                f"- **Needs:** High availability, data integrity, and intuitive interfaces.\n"
+                f"- **Pain Points:** Complex navigation, slow response times.\n\n"
+            )
 
     return (
         f"## 4. Stakeholders & Personas\n\n"
@@ -206,48 +242,51 @@ def _s4_stakeholders(biz: Dict) -> str:
         f"### 4.2 User Personas\n\n{persona_rows}---\n"
     )
 
-def _s5_functional_reqs(features: List[Dict], frs: List[Dict]) -> str:
+def _s5_functional_reqs(features: List[Dict], frs: List[Dict], biz: Dict = None) -> str:
     if not frs:
         return "## 5. Functional Requirements\n\n_No functional requirements detected._\n\n---\n"
 
+    biz = biz or {}
+    enriched_frs = biz.get("enriched_frs", {})  # dict keyed by FR id
+
     lines = [
         "## 5. Functional Requirements\n\n"
-        "Requirements are categorized by their originating architectural feature. Priorities are assigned based on empirical confidence signals.\n"
+        "Requirements are categorized by their originating architectural feature. "
+        "Each requirement is presented in plain English first, followed by the precise technical specification.\n"
     ]
 
     feat_conf = {f.get("name",""): float(f.get("confidence",0)) for f in features}
     feat_desc = {f.get("name",""): f.get("description", "") for f in features}
     fr_by_feat: Dict[str, List[Dict]] = {}
-    
     for fr in frs:
         lf = fr.get("linked_feature", fr.get("mapped_feature", "unknown"))
         fr_by_feat.setdefault(lf, []).append(fr)
 
     for feat_name, feat_frs in fr_by_feat.items():
-        display = _display(feat_name)
-        conf = feat_conf.get(feat_name, 0.7)
+        display  = _display(feat_name)
+        conf     = feat_conf.get(feat_name, 0.7)
         priority = _moscow(conf)
-        desc = feat_desc.get(feat_name, "")
-        
+        desc     = feat_desc.get(feat_name, "")
+
         lines.append(f"\n### 5.x Feature: {display}\n")
-        lines.append(f"**Context:** {desc}\n")
-        
-        fr_table = "| ID | Requirement | Priority | Verification |\n|---|---|---|---|\n"
+        lines.append(f"**What this feature does:** {desc}\n")
+
+        fr_table = "| ID | Plain English | Technical Specification | Business Impact | Priority |\n|---|---|---|---|---|\n"
         for fr in feat_frs:
-            fr_id = fr.get('id', 'FR-?')
-            fr_desc = fr.get('description', '')
-            fr_table += f"| **{fr_id}** | {fr_desc} | {priority} | Automated Test |\n"
-            
-            criteria = fr.get("acceptance_criteria", [])
+            fr_id   = fr.get('id', 'FR-?')
+            e       = enriched_frs.get(fr_id, {})
+            plain   = e.get("plain_english", fr.get('description', ''))
+            tech    = e.get("technical_note", fr.get('description', ''))
+            impact  = e.get("business_impact", "Required for system operation.")
+            fr_table += f"| **{fr_id}** | {plain} | {tech} | {impact} | {priority} |\n"
+            criteria = e.get("acceptance_criteria", fr.get("acceptance_criteria", []))
             if criteria:
-                fr_table += f"| | *AC:* {criteria[0]} | | |\n"
-                
+                fr_table += f"| | *Verified by:* {criteria[0]} | | | |\n"
         lines.append(fr_table)
 
     lines.append("\n### Proposed Integration Interfaces\n")
     lines.append("For modules exposing APIs or remote procedures, the following standard RESTful signatures are recommended:\n")
     lines.append("| Resource | Method | Endpoint Path | Purpose |\n|---|---|---|---|")
-    
     resource_feats = [f for f in features if "routing" not in f.get("name", "").lower()]
     for f in (resource_feats[:8] if resource_feats else features[:8]):
         path = _rest_path(f.get("name","resource"))
@@ -258,9 +297,12 @@ def _s5_functional_reqs(features: List[Dict], frs: List[Dict]) -> str:
     return "\n".join(lines)
 
 
-def _s6_nfrs(nfrs: List[Dict]) -> str:
+def _s6_nfrs(nfrs: List[Dict], biz: Dict = None) -> str:
     if not nfrs:
         return "## 6. Non-Functional Requirements\n\n_No NFRs detected._\n\n---\n"
+
+    biz = biz or {}
+    enriched_nfrs = biz.get("enriched_nfrs", {})  # keyed by NFR id
 
     cats: Dict[str, List[Dict]] = {}
     for nfr in nfrs:
@@ -269,14 +311,19 @@ def _s6_nfrs(nfrs: List[Dict]) -> str:
 
     lines = [
         "## 6. Non-Functional Requirements\n\n"
-        "Non-functional constraints dictating system qualities.\n"
+        "Non-functional constraints dictating system quality. Each requirement includes a plain English explanation "
+        "and a specific, measurable target.\n"
     ]
-    
     for cat, items in sorted(cats.items()):
         lines.append(f"\n### 6.x {cat} Requirements\n")
-        table = "| ID | Description | Target / SLA |\n|---|---|---|\n"
+        table = "| ID | What This Means | Technical Target | Business Consequence |\n|---|---|---|---|\n"
         for nfr in items:
-            table += f"| **{nfr.get('id','NFR-?')}** | {nfr.get('description','')} | Strict |\n"
+            nfr_id = nfr.get('id', 'NFR-?')
+            e = enriched_nfrs.get(nfr_id, {})
+            plain  = e.get("plain_english", nfr.get('description', ''))
+            target = e.get("specific_target", "Strict — to be defined during discovery")
+            impact = e.get("business_consequence", "Degraded user experience or system failure.")
+            table += f"| **{nfr_id}** | {plain} | {target} | {impact} |\n"
         lines.append(table)
 
     lines.append("\n---\n")
@@ -332,21 +379,49 @@ def _s7_data_requirements(features: List[Dict], tech_stack: List[str], biz: Dict
 
 def _s8_tech_stack(biz: Dict) -> str:
     tech_stack = biz.get("tech_stack", [])
-    
     if not tech_stack:
         return (
             "## 8. Technology Stack (TO-BE)\n\n"
             "_Technology stack was not explicitly detected. Standard enterprise cloud-native defaults apply._\n\n---\n"
         )
-        
+
+    # Plain-English purpose for common technologies
+    _purposes = {
+        "python": "Primary programming language for backend logic",
+        "java": "Primary programming language for backend services",
+        "javascript": "Frontend and/or server-side scripting language",
+        "typescript": "Typed superset of JavaScript for safer frontend/backend code",
+        "go": "High-performance backend language",
+        "rust": "Systems-level language for performance-critical components",
+        "react": "User interface library for building interactive web pages",
+        "spring": "Java framework for building web APIs and services",
+        "fastapi": "Python framework for building web APIs",
+        "django": "Python framework for building full-stack web applications",
+        "postgres": "Relational database for structured data storage",
+        "postgresql": "Relational database for structured data storage",
+        "mysql": "Relational database for structured data storage",
+        "mongodb": "Document database for flexible, schema-less data storage",
+        "redis": "In-memory cache for fast data retrieval and session storage",
+        "docker": "Containerisation tool — packages the app for consistent deployment",
+        "kubernetes": "Container orchestration — manages deployment at scale",
+        "kafka": "Message streaming platform for real-time data pipelines",
+        "elasticsearch": "Search engine for fast full-text queries",
+        "nginx": "Web server and reverse proxy for routing incoming traffic",
+        "gradle": "Build automation tool for compiling and packaging code",
+        "maven": "Build and dependency management tool for Java projects",
+        "npm": "Package manager for JavaScript dependencies",
+        "pip": "Package manager for Python dependencies",
+    }
+
     rows = ""
     for tech in tech_stack:
-        rows += f"| {tech} | Confirmed | Latest Stable / LTS |\n"
-        
+        purpose = _purposes.get(tech.lower(), "Supporting technology component")
+        rows += f"| {tech} | Confirmed | Latest Stable / LTS | {purpose} |\n"
+
     return (
         "## 8. Technology Stack (TO-BE)\n\n"
-        "| Component / Technology | Status | Target Version |\n"
-        "|---|---|---|\n"
+        "| Component / Technology | Status | Target Version | Purpose (Plain English) |\n"
+        "|---|---|---|---|\n"
         f"{rows}\n---\n"
     )
 
@@ -464,7 +539,30 @@ def _s13_acceptance() -> str:
         "- Disaster recovery (backup restoration) runbook is documented and successfully tested.\n\n---\n"
     )
 
-def _s14_roadmap() -> str:
+def _s14_roadmap(biz: Dict = None) -> str:
+    biz = biz or {}
+    enriched_phases = biz.get("enriched_roadmap", [])
+    if enriched_phases:
+        rows = ""
+        for p in enriched_phases:
+            feats = ", ".join(p.get("features_delivered", [])[:4])
+            risks = "; ".join(p.get("key_risks", [])[:2])
+            rows += (
+                f"| **Phase {p.get('number','?')}: {p.get('name','')}** "
+                f"| {p.get('focus','')} "
+                f"| {feats or 'See feature list'} "
+                f"| {p.get('definition_of_done','')} "
+                f"| {p.get('estimated_duration','TBD')} "
+                f"| {risks or 'None identified'} |\n"
+            )
+        return (
+            "## 14. Delivery Roadmap\n\n"
+            "A phased delivery approach mapped to the detected features. Earlier phases deliver the highest-confidence capabilities first.\n\n"
+            "| Phase | Business Focus | Key Features | Definition of Done | Est. Duration | Key Risks |\n"
+            "|---|---|---|---|---|---|\n"
+            f"{rows}\n---\n"
+        )
+    # Deterministic fallback
     return (
         "## 14. Delivery Roadmap\n\n"
         "A phased modernization and delivery approach.\n\n"
@@ -476,25 +574,36 @@ def _s14_roadmap() -> str:
     )
 
 def _s15_open_issues(biz: Dict, features: List[Dict]) -> str:
+    enriched = biz.get("enriched_open_issues", [])
+    if enriched:
+        rows = "".join(
+            f"| {i.get('id','OI-?')} | {i.get('question','')} | {i.get('owner','Both')} "
+            f"| {i.get('business_impact','')} | {i.get('recommended_action','')} | {i.get('priority','Medium')} |\n"
+            for i in enriched
+        )
+        return (
+            "## 15. Open Issues & Decisions Required\n\n"
+            "| ID | Open Question | Owner | Business Impact | Recommended Action | Priority |\n"
+            "|---|---|---|---|---|---|\n"
+            f"{rows}\n\n---\n"
+        )
+
+    # Deterministic fallback
     issues = []
-    
     if len(features) < 5:
         issues.append("Low feature count detected; system boundaries may be incomplete or strictly microservice-scoped.")
-        
     low = sum(1 for f in features if float(f.get("confidence", 1)) < 0.6)
     if low > 0:
         issues.append(f"{low} subsystems generated low confidence signals requiring manual review by lead engineers.")
-        
     if not biz.get("tech_stack"):
         issues.append("Technical stack could not be fully resolved; infrastructure assumptions must be validated.")
-        
     if not issues:
         issues.append("No immediate technical blockers identified from static analysis.")
-
-    rows = "\n".join(f"| OI-{i:02d} | {issue} | Open |" for i, issue in enumerate(issues, 1))
+    rows = "\n".join(f"| OI-{i:02d} | {issue} | Both | Undefined | Manual review | Medium |" for i, issue in enumerate(issues, 1))
     return (
         "## 15. Open Issues & Decisions Required\n\n"
-        "| ID | Issue | Status |\n|---|---|---|\n"
+        "| ID | Issue | Owner | Business Impact | Recommended Action | Priority |\n"
+        "|---|---|---|---|---|---|\n"
         f"{rows}\n\n---\n"
     )
 
@@ -510,6 +619,23 @@ def _s16_approval(today: str) -> str:
         f"_Document generated deterministically via Analyst Agent on {today}._\n"
     )
 
+
+def _s17_glossary(biz: Dict) -> str:
+    glossary = biz.get("glossary_terms", {})
+    if not glossary:
+        return ""
+    rows = "".join(
+        f"| **{term}** | {defn} |\n"
+        for term, defn in sorted(glossary.items())
+    )
+    return (
+        "## 17. Glossary of Technical Terms\n\n"
+        "This glossary explains technical terms used in this document in plain English, "
+        "so that all stakeholders can read and understand the full document.\n\n"
+        "| Term | Plain English Definition |\n|---|---|\n"
+        f"{rows}\n---\n"
+    )
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -522,15 +648,23 @@ def compose_brd(
 ) -> str:
     today = date.today().strftime("%B %d, %Y")
     tech_stack = business_context.get("tech_stack", [])
-    
+
+    # Update ToC if glossary terms exist
+    cover = _cover(business_context, today)
+    if business_context.get("glossary_terms"):
+        cover = cover.replace(
+            "16. Document Approval",
+            "16. Document Approval\n17. Glossary of Technical Terms"
+        )
+
     sections = [
-        _cover(business_context, today),
+        cover,
         _s1_exec_summary(business_context, features),
         _s2_business_context(business_context, features),
         _s3_current_state(business_context, features),
         _s4_stakeholders(business_context),
-        _s5_functional_reqs(features, functional_requirements),
-        _s6_nfrs(non_functional_requirements),
+        _s5_functional_reqs(features, functional_requirements, business_context),
+        _s6_nfrs(non_functional_requirements, business_context),
         _s7_data_requirements(features, tech_stack, business_context),
         _s8_tech_stack(business_context),
         _s9_cicd(tech_stack, business_context),
@@ -538,9 +672,10 @@ def compose_brd(
         _s11_risks(features, business_context),
         _s12_compliance(business_context),
         _s13_acceptance(),
-        _s14_roadmap(),
+        _s14_roadmap(business_context),
         _s15_open_issues(business_context, features),
         _s16_approval(today),
+        _s17_glossary(business_context),
     ]
     return "\n".join(sections)
 

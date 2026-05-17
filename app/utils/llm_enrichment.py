@@ -44,34 +44,62 @@ from app.utils.llm_client import llm_json_call, llm_text_call
 
 PRUNE_SYSTEM_PROMPT = """\
 You are a Principal Software Architect reviewing an automated static analysis report.
-You will be given a list of 'Extracted Features' and a brief summary of the repository's core modules.
-Your job is to identify and REMOVE any features that are "false positives" (hallucinations) 
+You will be given a list of 'Extracted Features', the product README (if available), and a brief summary
+of the repository's core modules.
+
+Your job is to identify and REMOVE any features that are "false positives" (hallucinations)
 caused by generic programming keywords being misinterpreted as business features.
 
-For example, a Weather App might use the word "connection" for an HTTP request. If the report claims it has a "Social Graph (Follow/Friend)" feature because of the word "connection", that is a false positive and must be removed.
+For example:
+- A Weather App might use the word "connection" for HTTP. If the report claims "Social Graph (Follow/Friend)"
+  because of the word "connection", that is a false positive.
+- A Resume Checker app should NOT have features like "PostgreSQL Database" or "AWS S3 Storage" unless
+  the README or code explicitly mentions them.
 
 STRICT RULES:
 - Return ONLY a JSON object containing a list of the IDs of the VALID features.
 - Schema: {"valid_feature_ids": ["feat-001", "feat-003"]}
 - If all are valid, return all IDs.
 - If none are valid, return an empty list: {"valid_feature_ids": []}
+- Use the README as the PRIMARY source of truth for what features are real.
 """
 
-def prune_hallucinated_features(features: List[Dict[str, Any]], repo_context: str) -> List[Dict[str, Any]]:
+def prune_hallucinated_features(
+    features: List[Dict[str, Any]],
+    repo_context,  # str (legacy) or dict (RepoContext from RepoContextBuilder)
+) -> List[Dict[str, Any]]:
     """
     Uses the LLM to semantically validate extracted features and prune false positives.
+
+    repo_context can be:
+      - str  : legacy comma-separated module names (old pipeline path)
+      - dict : RepoContext from RepoContextBuilder (new pipeline path, richer context)
     """
     if not features:
         return []
-        
-    feats_str = "\n".join([f"- {f.get('id')}: {f.get('name')} (Evidence: {', '.join(f.get('source_modules', []))})" for f in features])
-    
+
+    feats_str = "\n".join([
+        f"- {f.get('id')}: {f.get('name')} (Evidence: {', '.join(f.get('source_modules', []))})"
+        for f in features
+    ])
+
+    # Build context string based on input type
+    if isinstance(repo_context, dict):
+        signals = repo_context.get("intent_signals", {})
+        readme  = signals.get("readme", "")[:2000].strip()
+        pkg_desc = signals.get("package_description", "")
+        top_ctx  = f"README:\n{readme}\n\nPackage Description: {pkg_desc}" if readme else f"Package Description: {pkg_desc}"
+    else:
+        # Legacy: repo_context is a plain string of module names
+        top_ctx = f"Repository Context / Top Modules: {repo_context}"
+
     user_prompt = (
-        f"Repository Context / Top Modules: {repo_context}\n\n"
+        f"{top_ctx}\n\n"
         f"Extracted Features to Validate:\n{feats_str}\n\n"
-        "Analyze these features. Return the JSON list of 'valid_feature_ids' that genuinely belong to this type of repository."
+        "Analyze these features against the README and return the JSON list of 'valid_feature_ids' "
+        "that genuinely belong to this specific application."
     )
-    
+
     try:
         result = llm_json_call(PRUNE_SYSTEM_PROMPT, user_prompt, max_tokens=500)
         if "valid_feature_ids" in result:

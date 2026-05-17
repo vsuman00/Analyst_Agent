@@ -5,19 +5,14 @@ import argparse
 import subprocess
 from pathlib import Path
 from typing import List, Dict, Any
+from app.eca.language_loader import is_binary as _registry_is_binary, get_ignore_dirs
 
-IGNORE_DIRS = {'node_modules', '.git', 'dist', 'build'}
-
-# Extended heuristic to avoid processing binaries
-BINARY_EXTS = {
-    '.exe', '.dll', '.so', '.dylib', '.bin', '.out', 
-    '.png', '.jpg', '.jpeg', '.gif', '.ico', '.webp',
-    '.pdf', '.zip', '.tar', '.gz', '.7z', '.rar',
-    '.mp3', '.mp4', '.avi', '.mov', '.pyc', '.pyo', '.pyd'
-}
+# NOTE: IGNORE_DIRS and BINARY_EXTS are now loaded from the language registry.
+# Edit app/eca/config/language_registry.json to add new directories or binary types.
 
 def is_binary(file_path: Path) -> bool:
-    if file_path.suffix.lower() in BINARY_EXTS:
+    """Return True if the file should be skipped (binary extension or unreadable content)."""
+    if _registry_is_binary(file_path.suffix.lower()):
         return True
     try:
         with open(file_path, 'tr') as check_file:
@@ -71,8 +66,9 @@ def scan_repository(repo_url: str, dest_dir_str: str = "runtime/outputs/repo_sca
     file_metadata: List[Dict[str, Any]] = []
 
     for root, dirs, files in os.walk(dest_dir):
-        # Mutate dirs in place to skip ignored directories
-        dirs[:] = [d for d in dirs if d not in IGNORE_DIRS]
+        # Load ignore set from registry on each walk step
+        _ignore = get_ignore_dirs()
+        dirs[:] = [d for d in dirs if d not in _ignore]
         
         for file in files:
             file_path = Path(root) / file

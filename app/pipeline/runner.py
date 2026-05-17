@@ -14,6 +14,7 @@ from pathlib import Path
 from app.eca.repo_scanner import scan_repository
 from app.eca.file_classifier import run_classifier
 from app.eca.content_processor import run_content_processor
+from app.eca.repo_context_builder import build_repo_context  # NEW: Rich context extraction
 from app.context.aggregator import aggregate_context
 from app.context.normalizer import normalize_context
 
@@ -106,6 +107,15 @@ def run_end_to_end(repo_url: str, output_dir: str):
         chunks_data = run_content_processor(classified_data, dest_repo_dir)
         log_stage("3", "ContentProcessor", f"SUCCESS (Generated {len(chunks_data.get('chunks', []))} chunks)")
 
+        # ─── PHASE 1.5: BUILD RICH REPO CONTEXT ──────────────────────────────
+        # This replaces lossy aggregator→normalizer→module-names as the LLM input.
+        # Produces README, tech_stack, file structure, and key snippets in one object.
+        log_stage("3.5", "RepoContextBuilder")
+        repo_context = build_repo_context(str(dest_repo_dir), chunks_data)
+        log_stage("3.5", "RepoContextBuilder",
+                  f"SUCCESS (README: {repo_context['intent_signals'].get('source', 'none')}, "
+                  f"no_readme={repo_context['no_readme']})")
+
         log_stage("4", "ContextAggregator & Normalizer")
         aggregated_data = aggregate_context(chunks_data)
         normalized_data = normalize_context(aggregated_data)
@@ -115,7 +125,8 @@ def run_end_to_end(repo_url: str, output_dir: str):
         # ─── PHASE 2: ANALYSIS & FEATURE EXTRACTION ─────────────────────────
         log_stage("5", "FeatureExtractionAgent")
         chunks_list = chunks_data.get("chunks", [])
-        feat_ext_result = extract_features(norm_modules, chunks_list)
+        # Pass repo_context as primary LLM input (README, structure, snippets)
+        feat_ext_result = extract_features(norm_modules, chunks_list, repo_context=repo_context)
         raw_feats = feat_ext_result.model_dump()
         log_stage("5", "FeatureExtractionAgent", f"SUCCESS ({len(raw_feats['features'])} raw features)")
 
@@ -130,8 +141,8 @@ def run_end_to_end(repo_url: str, output_dir: str):
         import os
         if os.environ.get("OPENAI_API_KEY"):
             from app.utils.llm_enrichment import prune_hallucinated_features
-            repo_ctx = ", ".join([m["name"] for m in norm_modules[:5]])
-            pruned_feats = prune_hallucinated_features(val_feats_list, repo_ctx)
+            # Pass full repo_context so pruning uses README as primary signal
+            pruned_feats = prune_hallucinated_features(val_feats_list, repo_context)
             val_feats["validated_features"] = pruned_feats
             log_stage("6.5", "Semantic Feature Pruning (LLM)", f"SUCCESS ({len(pruned_feats)} features remain)")
         else:
@@ -140,7 +151,8 @@ def run_end_to_end(repo_url: str, output_dir: str):
         val_feats_list = val_feats["validated_features"]
 
         log_stage("7", "ProductUnderstandingAgent")
-        prod_result = understand_product(val_feats_list)
+        # Pass repo_context so LLM archetype detection has README as primary signal
+        prod_result = understand_product(val_feats_list, repo_context=repo_context)
         prod_dict = prod_result.model_dump()
         log_stage("7", "ProductUnderstandingAgent", f"SUCCESS (Archetype: {prod_dict['product']['name']})")
 
@@ -152,7 +164,10 @@ def run_end_to_end(repo_url: str, output_dir: str):
 
         log_stage("9", "NonFunctionalRequirementGenerator")
         system_type = prod_dict['product']['name']
-        tech_stack_nfr = scan_data.get("tech_stack", [])
+        # Use the rich tech_stack from RepoContextBuilder (dict with language/framework/platform).
+        # scan_data does NOT populate a tech_stack field — using it always yielded an empty list,
+        # causing the NFR generator to default to generic cloud-native requirements for every repo.
+        tech_stack_nfr = repo_context.get("tech_stack", {})
         nfr_result = generate_nfrs(system_type=system_type, tech_stack=tech_stack_nfr)
         nfr_dict = nfr_result.model_dump()
         log_stage("9", "NonFunctionalRequirementGenerator", f"SUCCESS ({len(nfr_dict['non_functional_requirements'])} NFRs)")
@@ -178,7 +193,21 @@ def run_end_to_end(repo_url: str, output_dir: str):
         biz_ctx["tech_stack"] = tech_stack_nfr
         biz_ctx["enterprise_artifacts"] = artifacts
 
-        # ─── PHASE 4: COMPOSITION & VALIDATION ───────────────────────────────
+        # ─── PHASE 3.7: BRD DEEP ENRICHMENT ─────────────────────────────────
+        # Injects detailed, grounded LLM content into biz_ctx for every BRD section.
+        # Dual-layer writing: plain English for business + technical note for engineers.
+        # Falls back gracefully if OPENAI_API_KEY is not set or any call fails.
+        try:
+            from app.analysis.brd_enrichment_agent import enrich_brd_context
+            biz_ctx = enrich_brd_context(
+                biz_ctx=biz_ctx,
+                features=enriched_feat_list,
+                fr_dict=fr_dict,
+                nfr_dict=nfr_dict,
+                repo_context=repo_context,   # NEW: pass full context so README reaches all 7 enrichment calls
+            )
+        except Exception as e:
+            print(f"[BRD ENRICHMENT] Phase 3.7 failed, continuing without enrichment. Error: {e}")
         log_stage("10", "BRDComposer & FixLoop")
         # FIX (Bug 1.1): Pass correct keyword argument names matching compose_brd() signature.
         initial_markdown = compose_brd(
