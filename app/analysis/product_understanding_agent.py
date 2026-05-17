@@ -304,23 +304,23 @@ def _build_summary(
 # ---------------------------------------------------------------------------
 
 _ARCHETYPE_SYSTEM_PROMPT = """\
-You are a senior product analyst. Given a list of software features and optional product documentation,
-your task is to identify the PRODUCT ARCHETYPE of this application.
+You are a senior product analyst. Given a list of software features, optional product documentation,
+and a STRUCTURED EVIDENCE block, your task is to identify the PRODUCT ARCHETYPE of this application.
 
 Rules:
-- Infer the archetype from the features and documentation ONLY. Do not make assumptions.
+- The STRUCTURED EVIDENCE block is the highest-priority signal. It reflects what files and configs
+  were actually found in the repository. Trust it over inferred feature names.
+- Infer the archetype from the features, documentation, and evidence ONLY. Do not make assumptions.
 - Use a concise, specific archetype label (e.g. "AI-Powered Resume Analysis Tool", not "Software System").
 - The product_name must be snake_case (e.g. "ai_resume_checker", "weather_dashboard").
 - The summary must be <= 100 words in plain English, describing what the product does for its users.
 - core_capabilities must be Title Case, user-facing feature names (not technical component names).
-- Valid archetypes include, but are not limited to:
-    Web App, Mobile App, Desktop Application, CLI Tool, API Backend Service,
-    Data Pipeline, Library/SDK, Demo/Sample App.
-- If the README or features mention MDI, RibbonBar, DataWindow, PowerBuilder, toolbar,
-  dialog, or similar desktop-GUI terms, classify as "Desktop Application" or
-  "Desktop UI Demo" — NOT as a Data Platform or Web App.
-- If the repo is explicitly described as a demo, example, or sample project in the
-  README, reflect that in the archetype_display (e.g. "Desktop UI Demo").
+- If evidence shows has_android=true or has_ios=true → archetype MUST be "Mobile Application" or
+  a specific mobile type (e.g. "Android Demo App"). NEVER classify as Web App or Server.
+- If evidence shows has_desktop=true → classify as "Desktop Application".
+- If evidence shows has_http_api=false and has_grpc=false → do NOT describe as an API backend.
+- If has_kubernetes=false → do NOT mention Kubernetes or cloud-native infrastructure.
+- If the repo is explicitly a demo/example → reflect that (e.g. "Android Demo App").
 
 Return ONLY valid JSON:
 {
@@ -335,9 +335,10 @@ Return ONLY valid JSON:
 def _llm_detect_archetype(
     validated_features: List[Dict],
     repo_context: Optional[Dict] = None,
+    evidence: Optional[Dict] = None,
 ) -> Optional[Dict]:
     """
-    PRIMARY: Use LLM to dynamically detect product archetype from features + README.
+    PRIMARY: Use LLM to dynamically detect product archetype from features + README + evidence.
     Returns None on any failure so caller falls back to DOMAIN_SIGNALS keyword voting.
     """
     if not _llm_json_call or not os.environ.get("OPENAI_API_KEY"):
@@ -357,8 +358,27 @@ def _llm_detect_archetype(
         signals = repo_context.get("intent_signals", {})
         readme_excerpt = signals.get("readme", "")[:2000].strip()
 
+    # Build structured evidence block — highest-priority signal for the LLM
+    ev = evidence or {}
+    evidence_block = {
+        "platform":         ev.get("platform", "unknown"),
+        "has_android":      ev.get("has_android", False),
+        "has_ios":          ev.get("has_ios", False),
+        "has_desktop":      ev.get("has_desktop", False),
+        "has_http_api":     ev.get("has_http_api", False),
+        "has_grpc":         ev.get("has_grpc", False),
+        "has_kubernetes":   ev.get("has_kubernetes", False),
+        "has_docker":       ev.get("has_docker", False),
+        "has_database":     ev.get("has_database", False),
+        "primary_language": ev.get("primary_language", "unknown"),
+        "build_tool":       ev.get("build_tool", "unknown"),
+        "api_endpoint_count": len(ev.get("actual_endpoints", [])),
+    }
+
     user_prompt = (
-        f"Product Documentation (primary signal):\n{readme_excerpt or '[Not available]'}\n\n"
+        f"STRUCTURED EVIDENCE (highest priority — reflects actual repo files):\n"
+        f"{json.dumps(evidence_block, indent=2)}\n\n"
+        f"Product Documentation (secondary signal):\n{readme_excerpt or '[Not available]'}\n\n"
         f"Detected Features:\n{json.dumps(feature_list, indent=2)}\n\n"
         "Identify the product archetype and return the JSON response."
     )
@@ -381,6 +401,7 @@ def _llm_detect_archetype(
 def understand_product(
     validated_features: List[Dict],
     repo_context: Optional[Dict] = None,
+    evidence: Optional[Dict] = None,
 ) -> ProductUnderstandingResult:
     """
     Derive a ProductProfile from validated feature data.
@@ -392,6 +413,7 @@ def understand_product(
     ----------
     validated_features : list of ValidatedFeature dicts
     repo_context : optional RepoContext dict from RepoContextBuilder
+    evidence : optional RepoEvidenceManifest dict (highest-priority platform signal)
     """
     if not validated_features:
         return ProductUnderstandingResult(
@@ -403,7 +425,7 @@ def understand_product(
         )
 
     # ── PRIMARY: LLM dynamic archetype detection ─────────────────────────────
-    llm_result = _llm_detect_archetype(validated_features, repo_context)
+    llm_result = _llm_detect_archetype(validated_features, repo_context, evidence=evidence)
     if llm_result:
         summary = _trim_to_words(llm_result.get("summary", ""), 120)
         return ProductUnderstandingResult(

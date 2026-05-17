@@ -1,440 +1,265 @@
-# Graph Report - .  (2026-05-04)
+# Graph Report - .  (2026-05-17)
 
 ## Corpus Check
-- 199 files · ~217,664 words
-- Verdict: corpus is large enough that graph structure adds value.
+- Corpus is ~47,167 words - fits in a single context window. You may not need a graph.
 
 ## Summary
-- 530 nodes · 628 edges · 86 communities detected
-- Extraction: 85% EXTRACTED · 15% INFERRED · 0% AMBIGUOUS · INFERRED: 94 edges (avg confidence: 0.5)
+- 581 nodes · 892 edges · 44 communities detected
+- Extraction: 86% EXTRACTED · 14% INFERRED · 0% AMBIGUOUS · INFERRED: 123 edges (avg confidence: 0.5)
 - Token cost: 0 input · 0 output
 
 ## God Nodes (most connected - your core abstractions)
-1. `OwnerControllerTest` - 13 edges
-2. `AnalysisFeature` - 12 edges
-3. `Requirement` - 12 edges
-4. `MinimalBRD` - 12 edges
-5. `ExtractedFeature` - 11 edges
-6. `FeatureExtractionResult` - 11 edges
-7. `ValidatedFeature` - 11 edges
-8. `FeatureValidationResult` - 11 edges
-9. `ProductProfile` - 10 edges
-10. `ProductUnderstandingResult` - 10 edges
+1. `BRDValidationResult` - 20 edges
+2. `compose_brd()` - 19 edges
+3. `Pipeline Runner (Orchestrator)` - 17 edges
+4. `AnalysisFeature` - 12 edges
+5. `Requirement` - 12 edges
+6. `MinimalBRD` - 12 edges
+7. `_load_registry()` - 12 edges
+8. `validate_brd()` - 11 edges
+9. `TestEvidenceManifest` - 11 edges
+10. `ValidatedFeature` - 11 edges
 
 ## Surprising Connections (you probably didn't know these)
+- `FeatureExtractionAgent` --signals interpreted by--> `FeatureInterpretationAgent`  [AMBIGUOUS]
+  README.md → Agents.md
 - `brd_fix_loop.py — Layer 3 Tool -------------------------------- BRDFixLoop  Inpu` --uses--> `BRDValidationResult`  [INFERRED]
   app/analysis/brd_fix_loop.py → app/schemas/models.py
 - `Apply deterministic fixes based on validation issues.` --uses--> `BRDValidationResult`  [INFERRED]
   app/analysis/brd_fix_loop.py → app/schemas/models.py
 - `Run the validation/fix loop.     Returns:       {         "final_markdown": str,` --uses--> `BRDValidationResult`  [INFERRED]
   app/analysis/brd_fix_loop.py → app/schemas/models.py
-- `functional_requirement_generator.py — Layer 3 Tool -----------------------------` --uses--> `FunctionalRequirement`  [INFERRED]
-  app/analysis/functional_requirement_generator.py → app/schemas/models.py
-- `Return (priority_label, max_fr_count) based on confidence.` --uses--> `FunctionalRequirement`  [INFERRED]
-  app/analysis/functional_requirement_generator.py → app/schemas/models.py
+- `brd_validator.py — Layer 3 Tool --------------------------------- BRDValidator` --uses--> `BRDValidationResult`  [INFERRED]
+  app/analysis/brd_validator.py → app/schemas/models.py
+
+## Hyperedges (group relationships)
+- **ECA Stage (Extract, Classify, Aggregate)** — repo-scanner, file-classifier, content-processor, sub-extractors, language-registry, language-loader, repo-context-builder [INFERRED]
+- **Context Intelligence Stage** — context-aggregator, context-normalizer, context-validator, context-builder [INFERRED]
+- **Rule-Based Analysis Stage** — feature-extraction-agent, feature-validator, semantic-feature-pruning, product-understanding-agent, business-understanding-agent, functional-requirement-generator, non-functional-requirement-generator, feature-interpretation-agent [INFERRED]
+- **BRD Composition & Validation Stage** — brd-composer, brd-validator, brd-fix-loop, brd-enrichment-agent, document-generator [INFERRED]
+- **A.N.T. Architecture Layer** — pipeline-sop-doc, technical-overview-doc, pipeline-runner, fastapi-api-layer, repo-scanner, file-classifier, content-processor, context-aggregator [INFERRED]
+- **LLM Integration Points** — semantic-feature-pruning, brd-enrichment-agent, llm-client, llm-enrichment [INFERRED]
+- **Sub-Extractor Group** — api-extractor, entity-extractor, dependency-extractor, defect-extractor, sub-extractors [INFERRED]
+- **Data Contract System** — pydantic-models, eca-output-schema, normalized-context-schema, payload-converter, final-output-builder [INFERRED]
+- **Validation Subsystem** — context-validator, feature-validator, brd-validator, brd-fix-loop [INFERRED]
+- **Project Documentation Corpus** — pipeline-sop-doc, technical-overview-doc, brd-sample-doc, prd-v3-doc, task-plan-blast, itemae-brd [INFERRED]
 
 ## Communities
 
-### Community 0 - "Basemodel"
-Cohesion: 0.07
-Nodes (52): BaseModel, brd_validator.py — Layer 3 Tool -------------------------------- BRDValidator  I, Evaluate the quality of a generated BRD based on strict parsing rules., validate_brd(), _build_module_index(), _content_summary(), extract_features(), _keywords_in_text() (+44 more)
-
-### Community 1 - "Main"
+### Community 0 - "Business Understanding & Models"
 Cohesion: 0.04
-Nodes (42): analyze_and_convert(), AnalyzeRequest, compose_brd_endpoint(), ComposeBRDRequest, convert_payload(), ConvertRequest, extract_features_endpoint(), ExtractFeaturesRequest (+34 more)
+Nodes (80): BaseModel, business_understanding_agent.py — Layer 3 Tool ---------------------------------, Derive business context deterministically from features and system type., understand_business(), Classify a file by consulting the language registry., # NOTE: Extension-to-role mapping is now fully driven by the language registry., _build_rich_context_str(), _calibrate_confidence() (+72 more)
 
-### Community 2 - "Models Analysisfeature"
+### Community 1 - "FastAPI Endpoints"
+Cohesion: 0.04
+Nodes (45): analyze_and_convert(), AnalyzeRequest, compose_brd_endpoint(), ComposeBRDRequest, convert_payload(), ConvertRequest, download_brd_docx(), download_brd_markdown() (+37 more)
+
+### Community 2 - "Semantic Pipeline Components"
+Cohesion: 0.06
+Nodes (38): API Extractor, Archetype Loader, Archetype Registry, BRDComposer, BRD Enrichment Agent (LLM Phase 3.5), BRDFixLoop (self-annealing repair), BRDValidator (8-dimension scorer), BusinessUnderstandingAgent (+30 more)
+
+### Community 3 - "Language Registry Loader"
+Cohesion: 0.1
+Nodes (31): _build_binary_set(), _build_build_file_names(), _build_config_ext_set(), _build_doc_ext_set(), _build_entry_points(), _build_ext_to_language(), _build_ignore_dirs(), describe() (+23 more)
+
+### Community 4 - "Repo Context Builder"
+Cohesion: 0.11
+Nodes (29): build_intent_signals(), build_repo_context(), _detect_tech_stack(), _extract_cargo(), _extract_entry_point_docstring(), _extract_package_json(), _extract_pyproject(), _extract_readme() (+21 more)
+
+### Community 5 - "BRD Composition Logic"
+Cohesion: 0.16
+Nodes (23): compose_brd(), _cover(), _display(), _has_keyword(), _moscow(), brd_composer.py — Enterprise BRD Composer (16-section) Produces a professional B, _s10_infra(), _s11_risks() (+15 more)
+
+### Community 6 - "BRD Grounding Tests (Core)"
+Cohesion: 0.13
+Nodes (10): _empty_api_data(), _empty_dep_data(), test_brd_grounding.py — Regression suite for BRD accuracy / evidence-groundednes, Verify that enrich_functional_requirements processes FRs in batches., Integration test: validate_brd should respect evidence in 9th dimension., A minimal BRD claiming Kubernetes for testing grounding., Unit tests for build_evidence_manifest using a temp directory., TestEvidenceManifest (+2 more)
+
+### Community 7 - "Pydantic Data Models"
 Cohesion: 0.2
 Nodes (23): AnalysisFeature, MinimalBRD, A product-level feature derived deterministically from the final payload., A functional requirement derived from a detected feature or validation output., Minimal, structured BRD derived purely from the pipeline's final payload., Requirement, build_brd(), _derive_gaps() (+15 more)
 
-### Community 3 - "Models Productprofile"
-Cohesion: 0.22
-Nodes (18): ProductProfile, ProductUnderstandingResult, Structured product understanding derived purely from validated features.      Ru, Top-level output envelope for ProductUnderstandingAgent., _build_summary(), _derive_capabilities(), _detect_archetype(), product_understanding_agent.py — Layer 3 Tool ---------------------------------- (+10 more)
+### Community 8 - "BRD Validator"
+Cohesion: 0.12
+Nodes (21): brd_validator.py — Layer 3 Tool --------------------------------- BRDValidator, Check that every input feature name and every FR-ID appears in the BRD.     Part, Check that BRD does not contain FR-IDs absent from the input set.     Feature na, Penalise presence of banned vague phrases.     Each violation deducts a fixed 0., Check that FR descriptions contain testable verbs (SHALL, MUST, validates, etc.), Check that NFR SLA targets contain actual measurable values,     not placeholder, Check that the Stakeholders section contains project-specific roles,     not jus, Check that each required section has meaningful content (≥ 30 words).     Also c (+13 more)
 
-### Community 4 - "Visualization"
+### Community 9 - "Product Understanding"
+Cohesion: 0.2
+Nodes (20): ProductProfile, ProductUnderstandingResult, Structured product understanding derived purely from validated features.      Ru, Top-level output envelope for ProductUnderstandingAgent., _build_summary(), _derive_capabilities(), _detect_archetype(), _llm_detect_archetype() (+12 more)
+
+### Community 10 - "BRD Grounding Tests (Loader)"
+Cohesion: 0.15
+Nodes (11): _load_brd(), Golden assertions against previously-generated BRD files.     Tests fail if BRD, Android repo BRDs must NOT claim Kubernetes infrastructure., Android repo BRDs should identify the platform as mobile/Android., Weather app BRD must NOT write a GDPR compliance block unless the README, Spring PetClinic is a web app — its BRD should mention REST API., Spring PetClinic uses JPA/HSQL — the data requirements section should reflect th, OD System Analyser BRD should not fabricate GDPR compliance if not in README. (+3 more)
+
+### Community 11 - "BRD Grounding Tests (Extended)"
+Cohesion: 0.18
+Nodes (8): Unit tests for the _score_tech_grounding dimension., Kubernetes in BRD + evidence says has_kubernetes=True → passes., Kubernetes in BRD but evidence says has_kubernetes=False → fails., GDPR in BRD but evidence says has_gdpr_mention=False → fails., Android in BRD + evidence has_android=True → passes., REST API in BRD but evidence says has_http_api=False → fails., A BRD with no technology terms always passes grounding check., TestTechGrounding
+
+### Community 12 - "BRD Enrichment Agent"
+Cohesion: 0.35
+Nodes (13): enrich_brd_context(), enrich_business_context(), enrich_executive_summary(), enrich_functional_requirements(), enrich_nfrs(), enrich_open_issues(), enrich_roadmap(), enrich_stakeholders() (+5 more)
+
+### Community 13 - "LLM Enrichment Module"
+Cohesion: 0.16
+Nodes (13): enrich_core_value(), enrich_enterprise_artifacts(), enrich_executive_summary(), enrich_features(), _fallback_core_value(), _fallback_summary(), prune_hallucinated_features(), llm_enrichment.py — Layer 3 Tool ---------------------------------- LLM Enrichme (+5 more)
+
+### Community 14 - "Document Generator (DOCX)"
+Cohesion: 0.22
+Nodes (12): _add_hr(), _apply_inline_markup(), _is_separator_row(), markdown_to_docx(), _parse_table_row(), document_generator.py — Layer 3 Tool -------------------------------------- Docu, Parse inline markdown (**bold**, _italic_, `code`) and add styled runs.     All, Parse a Markdown table row into a list of cell strings. (+4 more)
+
+### Community 15 - "Archetype Loader"
 Cohesion: 0.21
-Nodes (15): generate_all_visualizations(), plot_clusters_3d(), plot_cumulative_variance(), plot_elbow_curve(), plot_explained_variance(), plot_pca_3d(), visualization.py - PCA & KMeans Visualization Module.  Provides 5 professional v, 3D scatter plot of the first three PCA components.          Visualizes the data (+7 more)
+Nodes (11): _build_domain_signals(), get_domain_signals(), list_archetypes(), _load_registry(), archetype_loader.py — Analysis Config Registry Engine --------------------------, Force-clear all caches so that a modified archetype_registry.json     is re-read, Load the archetype registry JSON once and cache it for the process lifetime., Convert the JSON registry into the DOMAIN_SIGNALS shape expected by     ProductU (+3 more)
 
-### Community 5 - "Ownercontrollertest"
-Cohesion: 0.14
-Nodes (1): OwnerControllerTest
-
-### Community 6 - "Models Nonfunctionalrequirement"
-Cohesion: 0.28
-Nodes (12): NonFunctionalRequirement, NonFunctionalRequirementsResult, A single non-functional requirement inferred from system context.      Rules:, Top-level output envelope for NonFunctionalRequirementGenerator., _feature_names(), generate_nfrs(), _is_activated(), NFRCandidate (+4 more)
-
-### Community 7 - "Utils"
-Cohesion: 0.17
-Nodes (11): format_currency(), format_pct(), metric_card(), utils.py - Shared utility functions for the dashboard. Formatting helpers, color, Format a float as a percentage string., Format as Indian currency (₹) with commas., Return color based on PD risk level., Return a styled badge for risk level. (+3 more)
-
-### Community 8 - "Model Loader"
+### Community 16 - "LLM Client"
 Cohesion: 0.23
-Nodes (11): load_all_models(), load_ann(), load_kmeans(), load_pca(), load_scaler(), model_loader.py - Load pre-trained ML models (scaler, PCA, KMeans, ANN)., Load the fitted StandardScaler., Load the fitted PCA model. (+3 more)
+Nodes (11): _call_with_retry(), _completion_token_limit(), _format_usage(), llm_json_call(), llm_text_call(), llm_client.py — Layer 3 Utility --------------------------------- Centralised Op, Return compact token usage for diagnostics without depending on SDK internals., GPT-5-style chat completion limits include hidden reasoning plus visible text. (+3 more)
 
-### Community 9 - "Functional Requirement Generator"
-Cohesion: 0.29
-Nodes (10): generate_requirements(), _get_templates(), _modules_str(), _priority(), functional_requirement_generator.py — Layer 3 Tool -----------------------------, Generate 1–3 testable functional requirements per validated feature.      Parame, Return (priority_label, max_fr_count) based on confidence., _to_title() (+2 more)
+### Community 17 - "Evidence Manifest"
+Cohesion: 0.23
+Nodes (11): build_evidence_manifest(), _categorize_deps(), _detect_platform(), _log_manifest_summary(), evidence_manifest.py — ECA Layer 3 Tool ----------------------------------------, Derive the primary platform string from evidence — without any domain keyword li, Build the RepoEvidenceManifest from actual repo file system + extractor outputs., Print a one-line summary of the manifest for pipeline logs. (+3 more)
 
-### Community 10 - "Ownercontroller"
-Cohesion: 0.2
-Nodes (1): OwnerController
-
-### Community 11 - "Petcontroller"
-Cohesion: 0.2
-Nodes (1): PetController
-
-### Community 12 - "Petcontrollertest"
-Cohesion: 0.22
-Nodes (1): PetControllerTest
-
-### Community 13 - "Data Loader"
-Cohesion: 0.25
-Nodes (7): load_data(), load_raw_data(), load_strategy_report(), data_loader.py - Load the business financial stress dataset from CSV. Provides a, Load the CSV dataset into a pandas DataFrame.     Prints dataset shape and basic, Load the raw 100K business financial dataset and add engineered features., Load the sector-level strategy CSV generated by the ML pipeline.
-
-### Community 14 - "Sector Analysis"
-Cohesion: 0.25
-Nodes (7): analyze_sectors(), get_cluster_distribution(), get_sector_summary(), sector_analysis.py - Aggregate analysis by Business Type. Groups results by sect, Aggregate key metrics by Business_Type.      Returns DataFrame with: Count, Avg_, Aggregate risk, OD scoring, and interest strategy data by Business_Type.     Gen, Get cluster distribution per sector.
-
-### Community 15 - "Ann Risk Model"
-Cohesion: 0.32
-Nodes (7): build_ann(), create_risk_label(), ann_risk_model.py - Artificial Neural Network for risk prediction.  Architecture, Create a proxy risk label for training.     A business is considered 'high risk', Build the ANN model using sklearn MLPClassifier.     Architecture: 256 → 128 → 6, Prepare features, create labels, build, and train the ANN model.          Args:, train_ann()
-
-### Community 16 - "Brd Composer"
-Cohesion: 0.33
-Nodes (5): compose_brd(), brd_composer.py — Layer 3 Tool -------------------------------- BRDComposer (v0), Helper to format snake_case to Title Case if needed., Generate a Markdown BRD from the structured inputs., _to_title()
-
-### Community 17 - "Pettypeformattertest"
-Cohesion: 0.29
-Nodes (1): PetTypeFormatterTest
-
-### Community 18 - "Runner"
+### Community 18 - "LLM Client Tests"
 Cohesion: 0.4
-Nodes (4): log_stage(), run_full_pipeline.py — Master Orchestration Script -----------------------------, Helper function to cleanly log pipeline stages., run_end_to_end()
+Nodes (2): FakeCompletions, LLMClientTests
 
-### Community 19 - "Brd Fix Loop"
+### Community 19 - "Pipeline Runner"
+Cohesion: 0.28
+Nodes (8): log_stage(), run_full_pipeline.py — Master Orchestration Script -----------------------------, Phase 1 pipeline: clone → scan → classify → chunk → aggregate → normalize → vali, Attempt LLM enrichment. Returns enriched features, updated business context, and, Helper function to cleanly log pipeline stages., run_end_to_end(), run_pipeline(), _try_enrich()
+
+### Community 20 - "BRD Fix Loop Logic"
+Cohesion: 0.28
+Nodes (7): _apply_clarity_pass(), _build_traceability_appendix(), fix_loop.py — Layer 3 Tool ---------------------------- FixLoop  Deterministic s, Inject a Traceability Matrix appendix at the end of the BRD for any     features, Run up to MAX_ITERATIONS repair passes on the BRD.      Returns a dict with keys, Replace each banned vague phrase with its precise alternative.     Only operates, run_fix_loop()
+
+### Community 21 - "Entity Extractor"
+Cohesion: 0.32
+Nodes (7): extract_entities(), _extract_kotlin_fields(), entity_extractor.py — Phase 3 Extractor ----------------------------------------, Extract parameter names from a Kotlin data class constructor., Return a relative path string for display., Scan a repository directory for domain entity definitions.      Returns a dict w, _relative_path()
+
+### Community 22 - "Repo Scanner"
+Cohesion: 0.32
+Nodes (7): clone_repository(), is_binary(), # NOTE: IGNORE_DIRS and BINARY_EXTS are now loaded from the language registry., Return True if the file should be skipped (binary extension or unreadable conten, Clones the repository and returns True if successful., Clones and scans a repository, returning metadata matching the output schema., scan_repository()
+
+### Community 23 - "Defect Extractor"
+Cohesion: 0.38
+Nodes (6): extract_defects(), defect_extractor.py — Phase 3 Extractor ----------------------------------------, Check if this file/dir should be skipped., Scan a repository directory for known defects and code smells.      Returns a di, _relative_path(), _should_skip()
+
+### Community 24 - "BRD Fix Loop Orchestrator"
 Cohesion: 0.4
 Nodes (5): _apply_fixes(), brd_fix_loop.py — Layer 3 Tool -------------------------------- BRDFixLoop  Inpu, Apply deterministic fixes based on validation issues., Run the validation/fix loop.     Returns:       {         "final_markdown": str,, run_fix_loop()
 
-### Community 20 - "Repo Scanner"
-Cohesion: 0.47
-Nodes (5): clone_repository(), is_binary(), Clones the repository and returns True if successful., Clones and scans a repository, returning metadata matching the output schema., scan_repository()
+### Community 25 - "Dependency Extractor"
+Cohesion: 0.4
+Nodes (5): _categorize_dep(), extract_dependencies(), dependency_extractor.py — Phase 3 Extractor ------------------------------------, Scan a repository directory for build files and extract dependency metadata., Assign a category based on Maven group/artifact names.
 
-### Community 21 - "Vetcontrollertest"
-Cohesion: 0.33
-Nodes (1): VetControllerTest
+### Community 26 - "File Classifier"
+Cohesion: 0.5
+Nodes (4): classify_file(), Classify a file into a category using path heuristics + language registry., # NOTE: All language-specific data (extensions, entry points) is loaded from, run_classifier()
 
-### Community 22 - "Petrepositorytest"
-Cohesion: 0.33
-Nodes (1): PetRepositoryTest
+### Community 27 - "API Extractor"
+Cohesion: 0.5
+Nodes (4): extract_api_endpoints(), api_extractor.py — Phase 3 Extractor --------------------------------------- Ext, Scan a repository directory for REST endpoints and gRPC RPC definitions., _relative_path()
 
-### Community 23 - "Visitcontrollertest"
-Cohesion: 0.33
-Nodes (1): VisitControllerTest
-
-### Community 24 - "Ownerrepositorytest"
-Cohesion: 0.33
-Nodes (1): OwnerRepositoryTest
-
-### Community 25 - "Visitcontroller"
-Cohesion: 0.33
-Nodes (1): VisitController
-
-### Community 26 - "Extractor"
+### Community 28 - "ECA Extractor Orchestrator"
 Cohesion: 0.7
 Nodes (4): build_file_tree(), classify_file(), extract_eca(), is_text_file()
 
-### Community 27 - "Vetcontroller"
-Cohesion: 0.4
-Nodes (1): VetController
-
-### Community 28 - "Vet"
-Cohesion: 0.4
-Nodes (1): Vet
-
-### Community 29 - "Petrepository"
-Cohesion: 0.4
-Nodes (1): PetRepository
-
-### Community 30 - "Ownerrepository"
-Cohesion: 0.4
-Nodes (1): OwnerRepository
-
-### Community 31 - "Owner"
-Cohesion: 0.4
-Nodes (1): Owner
-
-### Community 32 - "Aggregator"
+### Community 29 - "Context Aggregator"
 Cohesion: 0.67
 Nodes (3): aggregate_context(), determine_module_name(), Determines the module name deterministically based on folder structure.     File
 
-### Community 33 - "Normalizer"
+### Community 30 - "Context Normalizer"
 Cohesion: 0.67
 Nodes (3): normalize_context(), Standardize a module name to snake_case format., standardize_name()
 
-### Community 34 - "Final Output Builder"
+### Community 31 - "Final Output Builder"
 Cohesion: 0.5
 Nodes (2): build_final_output(), Combines all partial outputs into the final deterministic schema.
 
-### Community 35 - "Simulation"
-Cohesion: 0.5
-Nodes (3): simulation.py - What-If Simulator engine. Allows users to input custom business, Simulate a single business through the ML pipeline.      Args:         params: D, simulate_business()
-
-### Community 36 - "Scoring"
-Cohesion: 0.5
-Nodes (3): compute_risk_scores(), scoring.py - Risk scoring and OD suitability computation. Uses loaded models to, Run the full scoring pipeline on a DataFrame:       Scale → PCA → Cluster → ANN
-
-### Community 37 - "Styles"
-Cohesion: 0.5
-Nodes (3): inject_custom_css(), styles.py - Glassmorphism CSS theme for the Credit Intelligence Dashboard. Provi, Inject the full glassmorphism CSS into the current Streamlit page.
-
-### Community 38 - "Scaling"
-Cohesion: 0.5
-Nodes (3): scaling.py - Feature scaling using StandardScaler. Standardizes features: X_scal, Apply StandardScaler to the selected numeric features.     Saves the fitted scal, scale_features()
-
-### Community 39 - "Feature Engineering"
-Cohesion: 0.5
-Nodes (3): engineer_features(), feature_engineering.py - Create derived features as per PRD.  Engineered Feature, Create new features from existing columns.          Args:         df: Preprocess
-
-### Community 40 - "Clustering"
-Cohesion: 0.5
-Nodes (3): apply_clustering(), clustering.py - K-Means clustering for business behavior segmentation. Segments, Apply K-Means clustering on PCA-transformed data.          Args:         X_pca:
-
-### Community 41 - "Interest Strategy"
-Cohesion: 0.5
-Nodes (3): apply_interest_strategy(), interest_strategy.py - Interest rate reduction strategy.  Rule (per PRD):     Re, Flag businesses eligible for interest rate reduction.          Criteria:
-
-### Community 42 - "Pca Module"
-Cohesion: 0.5
-Nodes (3): apply_pca(), pca_module.py - Principal Component Analysis for dimensionality reduction. Retai, Apply PCA to the scaled feature matrix.     Retains components that explain >= 9
-
-### Community 43 - "Evaluation"
-Cohesion: 0.5
-Nodes (3): evaluate_model(), evaluation.py - Model evaluation metrics. Computes AUC-ROC, classification repor, Evaluate the trained ANN model on the test set.          Args:         model: Tr
-
-### Community 44 - "Preprocessing"
-Cohesion: 0.5
-Nodes (3): preprocess_data(), preprocessing.py - Data cleaning and preprocessing. Handles missing values, dupl, Clean and preprocess the raw dataset.          Steps:         1. Drop duplicate
-
-### Community 45 - "Pipeline"
-Cohesion: 0.5
-Nodes (3): pipeline.py - End-to-end ML pipeline orchestrator.  Flow (per PRD):     Load Dat, Execute the full Intelligent OD System pipeline.          Returns:         dict:, run_pipeline()
-
-### Community 46 - "Od Scoring"
-Cohesion: 0.5
-Nodes (3): compute_od_score(), od_scoring.py - OD Suitability Scoring.  Formula (per PRD):     ODScore = (1 - P, Calculate the OD suitability score for each business.          Args:         df:
-
-### Community 47 - "Visitrepositorytest"
-Cohesion: 0.5
-Nodes (1): VisitRepositoryTest
-
-### Community 48 - "Validatortests"
-Cohesion: 0.5
-Nodes (1): ValidatorTests
-
-### Community 49 - "Pettypeformatter"
-Cohesion: 0.5
-Nodes (1): PetTypeFormatter
-
-### Community 50 - "Pet"
-Cohesion: 0.5
-Nodes (1): Pet
-
-### Community 51 - "Petvalidator"
-Cohesion: 0.5
-Nodes (1): PetValidator
-
-### Community 52 - "Visitrepository"
-Cohesion: 0.5
-Nodes (1): VisitRepository
-
-### Community 53 - "Cacheconfig"
-Cohesion: 0.5
-Nodes (1): CacheConfig
-
-### Community 54 - "Test Pipeline"
+### Community 32 - "Pipeline Integration Tests"
 Cohesion: 1.0
 Nodes (2): run_pipeline(), setup_dummy_repo()
 
-### Community 55 - "Content Processor"
+### Community 33 - "Content Processor"
 Cohesion: 1.0
 Nodes (2): process_file(), run_content_processor()
 
-### Community 56 - "File Classifier"
-Cohesion: 1.0
-Nodes (2): classify_file(), run_classifier()
-
-### Community 57 - "Petclinicintegrationtests"
+### Community 34 - "A.N.T. Architecture Docs"
 Cohesion: 0.67
-Nodes (1): PetclinicIntegrationTests
+Nodes (3): A.N.T. 3-Layer Architecture, BLAST Task Plan (5-Phase), Technical Overview Document
 
-### Community 58 - "Vetrepositorytest"
+### Community 35 - "BRD Output Samples"
 Cohesion: 0.67
-Nodes (1): VetRepositoryTest
+Nodes (3): BRD Document Output (.md/.docx), Sample BRD (architecture/BRD.md), Itemae Twitter Clone BRD (Sample)
 
-### Community 59 - "Vettest"
-Cohesion: 0.67
-Nodes (1): VetTest
-
-### Community 60 - "Mockmvcvalidationconfiguration"
-Cohesion: 0.67
-Nodes (1): MockMvcValidationConfiguration
-
-### Community 61 - "Crashcontrollertest"
-Cohesion: 0.67
-Nodes (1): CrashControllerTest
-
-### Community 62 - "Petclinicapplication"
-Cohesion: 0.67
-Nodes (1): PetClinicApplication
-
-### Community 63 - "Vetrepository"
-Cohesion: 0.67
-Nodes (1): VetRepository
-
-### Community 64 - "Crashcontroller"
-Cohesion: 0.67
-Nodes (1): CrashController
-
-### Community 65 - "Welcomecontroller"
-Cohesion: 0.67
-Nodes (1): WelcomeController
-
-### Community 66 - "Namedentity"
-Cohesion: 0.67
-Nodes (1): NamedEntity
-
-### Community 67 - "Validator"
+### Community 36 - "Context Validator"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 68 - "Builder"
+### Community 37 - "Context Builder"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 69 - "Config"
+### Community 38 - "Pipeline State Machine"
 Cohesion: 1.0
-Nodes (1): config.py - Configuration for the Credit Intelligence Dashboard. Points to ML pi
+Nodes (2): Pipeline State Machine, PRD v3 Document
 
-### Community 70 - "App"
-Cohesion: 1.0
-Nodes (1): app.py - Main entry point for the Credit Intelligence Dashboard. Streamlit multi
-
-### Community 71 - "1 Executive Summary"
-Cohesion: 1.0
-Nodes (1): 1_Executive_Summary.py - High-level KPI dashboard with glassmorphism design.
-
-### Community 72 - "4 Od Optimization"
-Cohesion: 1.0
-Nodes (1): 4_OD_Optimization.py - OD suitability analysis with glassmorphism design.
-
-### Community 73 - "5 Interest Strategy"
-Cohesion: 1.0
-Nodes (1): 5_Interest_Strategy.py - Interest rate reduction strategy with glassmorphism des
-
-### Community 74 - "3 Cluster Insights"
-Cohesion: 1.0
-Nodes (1): 3_Cluster_Insights.py - K-Means cluster profiling with glassmorphism design.
-
-### Community 75 - "6 What If"
-Cohesion: 1.0
-Nodes (1): 6_What_If_Simulator.py - Interactive simulator with glassmorphism design.
-
-### Community 76 - "2 Risk Analysis"
-Cohesion: 1.0
-Nodes (1): 2_Risk_Analysis.py - Risk analysis with glassmorphism design.
-
-### Community 77 - "Vets"
-Cohesion: 1.0
-Nodes (1): Vets
-
-### Community 78 - "Specialty"
-Cohesion: 1.0
-Nodes (1): Specialty
-
-### Community 79 - "Pettype"
-Cohesion: 1.0
-Nodes (1): PetType
-
-### Community 80 - "Visit"
-Cohesion: 1.0
-Nodes (1): Visit
-
-### Community 81 - "Baseentity"
-Cohesion: 1.0
-Nodes (1): BaseEntity
-
-### Community 82 - "Person"
-Cohesion: 1.0
-Nodes (1): Person
-
-### Community 83 - "Init"
+### Community 39 - "Package Init"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 84 - "Build Gradle"
+### Community 40 - "Test Rationale (Isolated)"
 Cohesion: 1.0
-Nodes (0): 
+Nodes (1): Create a minimal fake repo directory.
 
-### Community 85 - "Settings Gradle"
+### Community 41 - "System Overview"
 Cohesion: 1.0
-Nodes (0): 
+Nodes (1): Analyst Agent System
+
+### Community 42 - "ECA Output Schema"
+Cohesion: 1.0
+Nodes (1): ECA Output Schema
+
+### Community 43 - "Normalized Context Schema"
+Cohesion: 1.0
+Nodes (1): Normalized Context Schema
+
+## Ambiguous Edges - Review These
+- `FeatureExtractionAgent` → `FeatureInterpretationAgent`  [AMBIGUOUS]
+   · relation: signals interpreted by
 
 ## Knowledge Gaps
-- **116 isolated node(s):** `run_full_pipeline.py — Master Orchestration Script -----------------------------`, `Helper function to cleanly log pipeline stages.`, `Determines the module name deterministically based on folder structure.     File`, `Standardize a module name to snake_case format.`, `brd_composer.py — Layer 3 Tool -------------------------------- BRDComposer (v0)` (+111 more)
+- **181 isolated node(s):** `run_full_pipeline.py — Master Orchestration Script -----------------------------`, `Attempt LLM enrichment. Returns enriched features, updated business context, and`, `Helper function to cleanly log pipeline stages.`, `Phase 1 pipeline: clone → scan → classify → chunk → aggregate → normalize → vali`, `Determines the module name deterministically based on folder structure.     File` (+176 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **Thin community `Validator`** (2 nodes): `validator.py`, `validate_context()`
+- **Thin community `Context Validator`** (2 nodes): `validator.py`, `validate_context()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Builder`** (2 nodes): `builder.py`, `analyze_context()`
+- **Thin community `Context Builder`** (2 nodes): `builder.py`, `analyze_context()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Config`** (2 nodes): `config.py`, `config.py - Configuration for the Credit Intelligence Dashboard. Points to ML pi`
+- **Thin community `Pipeline State Machine`** (2 nodes): `Pipeline State Machine`, `PRD v3 Document`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `App`** (2 nodes): `app.py`, `app.py - Main entry point for the Credit Intelligence Dashboard. Streamlit multi`
+- **Thin community `Package Init`** (1 nodes): `__init__.py`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `1 Executive Summary`** (2 nodes): `1_Executive_Summary.py`, `1_Executive_Summary.py - High-level KPI dashboard with glassmorphism design.`
+- **Thin community `Test Rationale (Isolated)`** (1 nodes): `Create a minimal fake repo directory.`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `4 Od Optimization`** (2 nodes): `4_OD_Optimization.py`, `4_OD_Optimization.py - OD suitability analysis with glassmorphism design.`
+- **Thin community `System Overview`** (1 nodes): `Analyst Agent System`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `5 Interest Strategy`** (2 nodes): `5_Interest_Strategy.py`, `5_Interest_Strategy.py - Interest rate reduction strategy with glassmorphism des`
+- **Thin community `ECA Output Schema`** (1 nodes): `ECA Output Schema`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `3 Cluster Insights`** (2 nodes): `3_Cluster_Insights.py`, `3_Cluster_Insights.py - K-Means cluster profiling with glassmorphism design.`
-  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `6 What If`** (2 nodes): `6_What_If_Simulator.py`, `6_What_If_Simulator.py - Interactive simulator with glassmorphism design.`
-  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `2 Risk Analysis`** (2 nodes): `2_Risk_Analysis.py`, `2_Risk_Analysis.py - Risk analysis with glassmorphism design.`
-  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Vets`** (2 nodes): `Vets.kt`, `Vets`
-  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Specialty`** (2 nodes): `Specialty.kt`, `Specialty`
-  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Pettype`** (2 nodes): `PetType.kt`, `PetType`
-  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Visit`** (2 nodes): `Visit.kt`, `Visit`
-  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Baseentity`** (2 nodes): `BaseEntity.kt`, `BaseEntity`
-  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Person`** (2 nodes): `Person.kt`, `Person`
-  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Init`** (1 nodes): `__init__.py`
-  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Build Gradle`** (1 nodes): `build.gradle.kts`
-  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Settings Gradle`** (1 nodes): `settings.gradle.kts`
+- **Thin community `Normalized Context Schema`** (1 nodes): `Normalized Context Schema`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `BRDValidationResult` connect `Basemodel` to `Brd Fix Loop`?**
-  _High betweenness centrality (0.013) - this node is a cross-community bridge._
+- **What is the exact relationship between `FeatureExtractionAgent` and `FeatureInterpretationAgent`?**
+  _Edge tagged AMBIGUOUS (relation: signals interpreted by) - confidence is low._
+- **Why does `BRDValidationResult` connect `Business Understanding & Models` to `BRD Fix Loop Orchestrator`, `BRD Validator`, `BRD Fix Loop Logic`?**
+  _High betweenness centrality (0.046) - this node is a cross-community bridge._
+- **Why does `ProductProfile` connect `Product Understanding` to `Business Understanding & Models`?**
+  _High betweenness centrality (0.012) - this node is a cross-community bridge._
+- **Why does `ProductUnderstandingResult` connect `Product Understanding` to `Business Understanding & Models`?**
+  _High betweenness centrality (0.012) - this node is a cross-community bridge._
+- **Are the 17 inferred relationships involving `BRDValidationResult` (e.g. with `brd_fix_loop.py — Layer 3 Tool -------------------------------- BRDFixLoop  Inpu` and `Apply deterministic fixes based on validation issues.`) actually correct?**
+  _`BRDValidationResult` has 17 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 9 inferred relationships involving `AnalysisFeature` (e.g. with `payload_converter.py — Layer 3 Tool ------------------------------------- Conver` and `Infer a feature category from its source file paths deterministically.`) actually correct?**
   _`AnalysisFeature` has 9 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 9 inferred relationships involving `Requirement` (e.g. with `payload_converter.py — Layer 3 Tool ------------------------------------- Conver` and `Infer a feature category from its source file paths deterministically.`) actually correct?**
-  _`Requirement` has 9 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 9 inferred relationships involving `MinimalBRD` (e.g. with `payload_converter.py — Layer 3 Tool ------------------------------------- Conver` and `Infer a feature category from its source file paths deterministically.`) actually correct?**
-  _`MinimalBRD` has 9 INFERRED edges - model-reasoned connections that need verification._
-- **What connects `run_full_pipeline.py — Master Orchestration Script -----------------------------`, `Helper function to cleanly log pipeline stages.`, `Determines the module name deterministically based on folder structure.     File` to the rest of the system?**
-  _116 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `Basemodel` be split into smaller, more focused modules?**
-  _Cohesion score 0.07 - nodes in this community are weakly interconnected._
-- **Should `Main` be split into smaller, more focused modules?**
-  _Cohesion score 0.04 - nodes in this community are weakly interconnected._
+- **What connects `run_full_pipeline.py — Master Orchestration Script -----------------------------`, `Attempt LLM enrichment. Returns enriched features, updated business context, and`, `Helper function to cleanly log pipeline stages.` to the rest of the system?**
+  _181 weakly-connected nodes found - possible documentation gaps or missing edges._

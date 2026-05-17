@@ -222,9 +222,21 @@ Return ONLY valid JSON:
 }}"""
 
 
-def enrich_functional_requirements(frs: List[Dict], features: List[Dict]) -> Dict:
+def enrich_functional_requirements(
+    frs: List[Dict],
+    features: List[Dict],
+    batch_size: int = 8,
+) -> Dict:
+    """
+    Enrich functional requirements in batches of `batch_size` (default 8) to prevent
+    token-limit failures (finish_reason=length) on large repositories.
+
+    All batches are merged into a single result dict:
+      {"enriched_frs": [...], "glossary_terms": [...]}
+    """
     if not frs:
         return {}
+
     feat_map = {
         f.get("name", ""): {
             "description": f.get("description", ""),
@@ -243,11 +255,28 @@ def enrich_functional_requirements(frs: List[Dict], features: List[Dict]) -> Dic
         }
         for fr in frs
     ]
-    return _safe_call(
-        _FR_SYS,
-        f"FRs to enrich:\n```json\n{json.dumps(frs_ctx, indent=2)}\n```\nEnrich each requirement.",
-        1500, "FunctionalRequirements"
-    )
+
+    # ── Batch processing ──────────────────────────────────────────────────────
+    all_enriched: List[Dict] = []
+    all_glossary: List[Dict] = []
+
+    for batch_start in range(0, len(frs_ctx), batch_size):
+        batch = frs_ctx[batch_start: batch_start + batch_size]
+        batch_num = batch_start // batch_size + 1
+        total_batches = (len(frs_ctx) + batch_size - 1) // batch_size
+        print(f"[BRD ENRICHMENT] FR batch {batch_num}/{total_batches} ({len(batch)} FRs)...")
+
+        result = _safe_call(
+            _FR_SYS,
+            f"FRs to enrich:\\n```json\\n{json.dumps(batch, indent=2)}\\n```\\nEnrich each requirement.",
+            1500,
+            f"FunctionalRequirements-batch{batch_num}",
+        )
+        all_enriched.extend(result.get("enriched_frs", []))
+        all_glossary.extend(result.get("glossary_terms", []))
+
+    return {"enriched_frs": all_enriched, "glossary_terms": all_glossary}
+
 
 
 # ─── 5. NFR SLA Enrichment ────────────────────────────────────────────────────

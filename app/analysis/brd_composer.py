@@ -242,11 +242,12 @@ def _s4_stakeholders(biz: Dict) -> str:
         f"### 4.2 User Personas\n\n{persona_rows}---\n"
     )
 
-def _s5_functional_reqs(features: List[Dict], frs: List[Dict], biz: Dict = None) -> str:
+def _s5_functional_reqs(features: List[Dict], frs: List[Dict], biz: Dict, evidence: Dict = None) -> str:
     if not frs:
         return "## 5. Functional Requirements\n\n_No functional requirements detected._\n\n---\n"
 
     biz = biz or {}
+    evidence = evidence or {}
     enriched_frs = biz.get("enriched_frs", {})  # dict keyed by FR id
 
     lines = [
@@ -285,13 +286,43 @@ def _s5_functional_reqs(features: List[Dict], frs: List[Dict], biz: Dict = None)
         lines.append(fr_table)
 
     lines.append("\n### Proposed Integration Interfaces\n")
-    lines.append("For modules exposing APIs or remote procedures, the following standard RESTful signatures are recommended:\n")
-    lines.append("| Resource | Method | Endpoint Path | Purpose |\n|---|---|---|---|")
-    resource_feats = [f for f in features if "routing" not in f.get("name", "").lower()]
-    for f in (resource_feats[:8] if resource_feats else features[:8]):
-        path = _rest_path(f.get("name","resource"))
-        lines.append(f"| {_display(f.get('name',''))} | GET | `/api/v1{path}` | Retrieve state/data |")
-        lines.append(f"| {_display(f.get('name',''))} | POST | `/api/v1{path}` | Mutate state/data |")
+
+    actual_endpoints = (evidence or {}).get("actual_endpoints", [])
+    has_grpc         = (evidence or {}).get("has_grpc", False)
+    has_http_api     = (evidence or {}).get("has_http_api", False)
+
+    if actual_endpoints:
+        # Use REAL extracted endpoints from the repo — never invent paths
+        lines.append("The following HTTP endpoints were extracted from the repository source code:\n")
+        lines.append("| Handler | Method | Endpoint Path | Source File |\n|---|---|---|---|")
+        for ep in actual_endpoints[:12]:  # cap at 12 to keep BRD readable
+            lines.append(
+                f"| `{ep.get('handler','')}` "
+                f"| **{ep.get('method','')}** "
+                f"| `{ep.get('path','')}` "
+                f"| {ep.get('source_file','')} |"
+            )
+    elif has_grpc:
+        grpc_rpcs = (evidence or {}).get("grpc_rpcs", [])
+        lines.append("This service uses **gRPC** for inter-service communication (`.proto` files detected).\n")
+        if grpc_rpcs:
+            lines.append("| Service | RPC | Request | Response | Source File |\n|---|---|---|---|---|")
+            for rpc in grpc_rpcs[:8]:
+                lines.append(
+                    f"| `{rpc.get('service','')}` "
+                    f"| `{rpc.get('rpc','')}` "
+                    f"| `{rpc.get('request','')}` "
+                    f"| `{rpc.get('response','')}` "
+                    f"| {rpc.get('source_file','')} |"
+                )
+    elif not has_http_api:
+        # No API evidence detected — do not invent REST paths
+        lines.append(
+            "_No HTTP API routes or gRPC definitions were detected in this repository. "
+            "If REST endpoints are required, add them as an Open Issue in Section 15._"
+        )
+    else:
+        lines.append("_API routes detected but could not be statically extracted. Review source for endpoint definitions._")
 
     lines.append("\n---\n")
     return "\n".join(lines)
@@ -330,50 +361,83 @@ def _s6_nfrs(nfrs: List[Dict], biz: Dict = None) -> str:
     return "\n".join(lines)
 
 
-def _s7_data_requirements(features: List[Dict], tech_stack: List[str], biz: Dict) -> str:
+def _s7_data_requirements(
+    features: List[Dict],
+    tech_stack: List[str],
+    biz: Dict,
+    evidence: Dict = None,
+) -> str:
+    evidence = evidence or {}
     artifacts = biz.get("enterprise_artifacts", {})
+
+    # Determine real DB type from evidence, not generic tech_stack keyword search
+    db_deps = evidence.get("dep_categories", {}).get("database", [])
+    has_database = evidence.get("has_database", False)
+    has_gdpr     = evidence.get("has_gdpr_mention", False)
+
+    if not has_database and not db_deps:
+        # No database detected — do not write a full DB strategy section
+        return (
+            "## 7. Data Requirements\n\n"
+            "### 7.1 Database & Persistence Strategy\n\n"
+            "_No database dependencies were detected in this repository. "
+            "If persistent storage is required, specify the data store in Open Issues (Section 15)._\n\n"
+            "### 7.2 Data Retention & Compliance\n\n"
+            "_Data retention policy not applicable — no persistence layer detected._\n\n---\n"
+        )
+
+    # Build DB strategy from actual detected dependencies
+    if db_deps:
+        storage_type = ", ".join(db_deps[:3])
+    elif _has_keyword("sql", tech_stack) or _has_keyword("postgres", tech_stack):
+        storage_type = "Relational (SQL)"
+    elif _has_keyword("mongo", tech_stack) or _has_keyword("redis", tech_stack):
+        storage_type = "NoSQL / Document store"
+    else:
+        storage_type = "Relational database (inferred from framework)"
+
     if artifacts and "data_requirements" in artifacts and artifacts["data_requirements"]:
         rows = ""
         for r in artifacts["data_requirements"]:
             rows += f"| {r.get('requirement','')} | {r.get('specification','')} |\n"
-        return (
-            "## 7. Data Requirements\n\n"
-            "### 7.1 Database & Persistence Strategy\n\n"
-            "| Requirement | Specification |\n|---|---|\n"
-            f"{rows}\n\n"
-            "### 7.2 Data Retention & Compliance\n\n"
-            "- **PII Data**: Encrypted at rest (AES-256). Subject to GDPR right-to-erasure workflows.\n"
-            "- **Application Logs**: Hot storage for 30 days, cold archive for 1 year.\n"
-            "- **Secrets**: No secrets or API keys stored in plain text databases.\n\n---\n"
+    else:
+        rows = (
+            f"| Storage Paradigm | {storage_type} |\n"
+            "| Data Integrity | ACID compliance for transactional data. |\n"
+            "| Backup Strategy | Daily automated snapshots with 30-day retention. |\n"
+            "| Data Auditing | Append-only audit logs for all mutations to domain entities. |\n"
+            "| Soft Deletion | Records SHALL use `deleted_at` timestamps to prevent accidental loss. |\n"
         )
-        
-    # Fallback deterministic generation
-    has_sql = _has_keyword("sql", tech_stack) or _has_keyword("postgres", tech_stack) or _has_keyword("mysql", tech_stack)
-    has_nosql = _has_keyword("mongo", tech_stack) or _has_keyword("redis", tech_stack)
-    
-    storage_type = "Relational (SQL) and/or Document storage"
-    if has_sql and not has_nosql:
-        storage_type = "Relational (SQL) database schema"
-    elif has_nosql and not has_sql:
-        storage_type = "NoSQL/Document store"
-        
-    schema_note = (
-        "| Requirement | Specification |\n|---|---|\n"
-        f"| Storage Paradigm | {storage_type} based on tech stack analysis. |\n"
-        "| Data Integrity | ACID compliance for billing/auth; Eventual consistency acceptable for feeds/logs. |\n"
-        "| Backup Strategy | Daily automated snapshots with 30-day retention and point-in-time recovery (PITR). |\n"
-        "| Data Auditing | Append-only audit logs for all mutations to domain entities. |\n"
-        "| Soft Deletion | Records SHALL utilize `deleted_at` timestamps to prevent accidental data loss. |\n"
-    )
+
+    # Only write GDPR/PII block if the repo itself mentions it
+    if has_gdpr:
+        compliance_block = (
+            "### 7.2 Data Retention & Compliance\n\n"
+            "- **PII Data**: Encrypted at rest (AES-256). Subject to GDPR right-to-erasure workflows "
+            "(evidenced by compliance mention in repository documentation).\n"
+            "- **Application Logs**: Hot storage for 30 days, cold archive for 1 year.\n"
+            "- **Secrets**: No secrets or API keys stored in plain text.\n"
+        )
+    elif evidence.get("has_auth"):
+        compliance_block = (
+            "### 7.2 Data Retention & Compliance\n\n"
+            "- **Credentials**: Hashed using a strong one-way function (e.g., bcrypt). Never stored in plain text.\n"
+            "- **Session Tokens**: Short-lived; invalidated on logout.\n"
+            "- **Secrets**: No secrets or API keys stored in plain text.\n"
+        )
+    else:
+        compliance_block = (
+            "### 7.2 Data Retention & Compliance\n\n"
+            "_Data classification and retention policy requires manual definition. "
+            "No PII or compliance signals were detected in the repository._\n"
+        )
 
     return (
         "## 7. Data Requirements\n\n"
         "### 7.1 Database & Persistence Strategy\n\n"
-        f"{schema_note}\n\n"
-        "### 7.2 Data Retention & Compliance\n\n"
-        "- **PII Data**: Encrypted at rest (AES-256). Subject to GDPR right-to-erasure workflows.\n"
-        "- **Application Logs**: Hot storage for 30 days, cold archive for 1 year.\n"
-        "- **Secrets**: No secrets or API keys stored in plain text databases.\n\n---\n"
+        "| Requirement | Specification |\n|---|---|\n"
+        f"{rows}\n\n"
+        f"{compliance_block}\n---\n"
     )
 
 
@@ -455,11 +519,50 @@ def _s9_cicd(tech_stack: List[str], biz: Dict) -> str:
         f"{rows}\n---\n"
     )
 
-def _s10_infra(tech_stack: List[str], biz: Dict) -> str:
-    orchestration = "Managed Kubernetes (EKS / GKE / AKS) or Serverless Containers"
-    if _has_keyword("docker", tech_stack): orchestration = "Docker Containers"
-    if _has_keyword("kubernetes", tech_stack) or _has_keyword("k8s", tech_stack): orchestration = "Kubernetes Cluster"
-    if _has_keyword("serverless", tech_stack) or _has_keyword("lambda", tech_stack): orchestration = "Serverless Functions"
+def _s10_infra(tech_stack: List[str], biz: Dict, evidence: Dict = None) -> str:
+    evidence = evidence or {}
+
+    # Android and desktop apps don't have server infrastructure
+    if evidence.get("has_android") or evidence.get("has_ios"):
+        return (
+            "## 10. Infrastructure Requirements\n\n"
+            "**Target Architecture:** Mobile Application — No server infrastructure detected in this repository.\n\n"
+            "| Resource Aspect | Specification |\n|---|---|\n"
+            "| Deployment | Published via app store (Google Play / Apple App Store). |"
+            " No server-side provisioning required unless a backend service is added. |\n"
+            "| Backend API | Not evidenced. Define in Open Issues (Section 15) if a backend is needed. |\n"
+            "\n---\n"
+        )
+    if evidence.get("has_desktop"):
+        return (
+            "## 10. Infrastructure Requirements\n\n"
+            "**Target Architecture:** Desktop Application — Server infrastructure not applicable.\n\n"
+            "| Resource Aspect | Specification |\n|---|---|\n"
+            "| Distribution | Installer package (e.g., MSI, NSIS, pkg). |\n"
+            "| Update Mechanism | To be defined. Requires manual specification. |\n"
+            "\n---\n"
+        )
+
+    # For server/web apps — only claim what the repo has evidence for
+    if evidence.get("has_kubernetes"):
+        orchestration = "Kubernetes Cluster"
+        infra_note = " (evidenced by k8s manifests / Deployment YAML files in repository)"
+    elif evidence.get("has_docker"):
+        orchestration = "Docker Containers"
+        infra_note = " (evidenced by Dockerfile in repository)"
+    elif _has_keyword("serverless", tech_stack) or _has_keyword("lambda", tech_stack):
+        orchestration = "Serverless Functions"
+        infra_note = ""
+    else:
+        # No infra evidence — do not invent cloud-native architecture
+        return (
+            "## 10. Infrastructure Requirements\n\n"
+            "**Target Architecture:** Not evidenced — no container, cloud, or deployment configuration detected.\n\n"
+            "| Resource Aspect | Specification |\n|---|---|\n"
+            "| Deployment Target | Requires definition. No Dockerfile or infrastructure-as-code was detected. |\n"
+            "| High Availability | To be defined based on chosen deployment target. |\n"
+            "\n---\n"
+        )
 
     artifacts = biz.get("enterprise_artifacts", {})
     if artifacts and "infrastructure" in artifacts and artifacts["infrastructure"]:
@@ -468,16 +571,16 @@ def _s10_infra(tech_stack: List[str], biz: Dict) -> str:
             rows += f"| {r.get('aspect','')} | {r.get('specification','')} |\n"
     else:
         rows = (
-            "| High Availability | Minimum 2 replicas/instances deployed across multiple availability zones. |\n"
-            "| Auto-scaling | HPA / Auto-scaling groups configured based on CPU/Memory utilization thresholds (target ~70%). |\n"
-            "| Load Balancing | Layer 7 Application Load Balancer with SSL termination. |\n"
-            "| Observability | Centralized logging, distributed tracing, and metric scraping (e.g., OpenTelemetry, Prometheus). |\n"
-            "| Secret Management | Runtime secret injection via Vault or Cloud Secret Manager. |\n"
+            "| High Availability | Minimum 2 replicas deployed across availability zones. |\n"
+            "| Auto-scaling | Configured based on CPU/Memory utilization thresholds. |\n"
+            "| Load Balancing | Application Load Balancer with SSL termination. |\n"
+            "| Observability | Centralized logging and metric collection. |\n"
+            "| Secret Management | Runtime secret injection via secure vault. |\n"
         )
 
     return (
         "## 10. Infrastructure Requirements\n\n"
-        f"**Target Architecture:** Cloud-Native / {orchestration}\n\n"
+        f"**Target Architecture:** {orchestration}{infra_note}\n\n"
         "| Resource Aspect | Specification |\n|---|---|\n"
         f"{rows}\n---\n"
     )
@@ -506,20 +609,34 @@ def _s11_risks(features: List[Dict], biz: Dict) -> str:
         f"{rows}\n---\n"
     )
 
-def _s12_compliance(biz: Dict) -> str:
+def _s12_compliance(biz: Dict, evidence: Dict = None) -> str:
+    evidence = evidence or {}
+    has_http_api = evidence.get("has_http_api", False)
+    has_auth     = evidence.get("has_auth", False)
+    has_gdpr     = evidence.get("has_gdpr_mention", False)
+
     artifacts = biz.get("enterprise_artifacts", {})
     if artifacts and "compliance" in artifacts and artifacts["compliance"]:
         rows = ""
         for r in artifacts["compliance"]:
             rows += f"| {r.get('domain','')} | {r.get('requirement','')} | {r.get('strategy','')} |\n"
-    else:
+    elif not has_http_api and not has_auth and not has_gdpr:
+        # No web, auth, or compliance evidence — do not invent GDPR/OWASP/TLS
         rows = (
-            "| Data Privacy (GDPR/CCPA) | Protection of Personally Identifiable Information (PII) | Encryption at rest, Data anonymization, Consent tracking. |\n"
-            "| Security (OWASP) | Defense against top web vulnerabilities | SAST/DAST in pipelines, strict input validation, parameterized queries. |\n"
-            "| Auditability | Traceability of administrative actions | Immutable audit logs for all destructive operations. |\n"
-            "| Network Security | Secure data transit | TLS 1.3 enforcement on all external endpoints. |\n"
+            "| Compliance Scope | Not evidenced — no web endpoints, authentication, or data privacy signals detected. "
+            "Requires manual definition based on deployment context. | Define in Open Issues (Section 15). |\n"
         )
-        
+    else:
+        rows = ""
+        if has_gdpr:
+            rows += "| Data Privacy (GDPR/CCPA) | Protection of PII — evidenced by compliance mention in repository docs. | Encryption at rest, consent tracking. |\n"
+        if has_auth:
+            rows += "| Authentication Security | Secure credential storage and session management. | Password hashing, token expiry, rate limiting on auth endpoints. |\n"
+        if has_http_api:
+            rows += "| Security (OWASP) | Defense against common web vulnerabilities. | SAST/DAST in pipelines, input validation, parameterized queries. |\n"
+            rows += "| Network Security | Secure data transit. | TLS enforcement on all external endpoints. |\n"
+        rows += "| Auditability | Traceability of administrative actions. | Immutable audit logs for all destructive operations. |\n"
+
     return (
         "## 12. Compliance & Legal Requirements\n\n"
         "| Domain | Requirement | Implementation Strategy |\n|---|---|---|\n"
@@ -645,8 +762,10 @@ def compose_brd(
     features: List[Dict],
     functional_requirements: List[Dict],
     non_functional_requirements: List[Dict],
+    evidence: Dict = None,
 ) -> str:
-    today = date.today().strftime("%B %d, %Y")
+    evidence   = evidence or {}
+    today      = date.today().strftime("%B %d, %Y")
     tech_stack = business_context.get("tech_stack", [])
 
     # Update ToC if glossary terms exist
@@ -663,14 +782,14 @@ def compose_brd(
         _s2_business_context(business_context, features),
         _s3_current_state(business_context, features),
         _s4_stakeholders(business_context),
-        _s5_functional_reqs(features, functional_requirements, business_context),
+        _s5_functional_reqs(features, functional_requirements, business_context, evidence=evidence),
         _s6_nfrs(non_functional_requirements, business_context),
-        _s7_data_requirements(features, tech_stack, business_context),
+        _s7_data_requirements(features, tech_stack, business_context, evidence=evidence),
         _s8_tech_stack(business_context),
         _s9_cicd(tech_stack, business_context),
-        _s10_infra(tech_stack, business_context),
+        _s10_infra(tech_stack, business_context, evidence=evidence),
         _s11_risks(features, business_context),
-        _s12_compliance(business_context),
+        _s12_compliance(business_context, evidence=evidence),
         _s13_acceptance(),
         _s14_roadmap(business_context),
         _s15_open_issues(business_context, features),

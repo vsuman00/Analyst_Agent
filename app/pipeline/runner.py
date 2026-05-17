@@ -14,7 +14,10 @@ from pathlib import Path
 from app.eca.repo_scanner import scan_repository
 from app.eca.file_classifier import run_classifier
 from app.eca.content_processor import run_content_processor
-from app.eca.repo_context_builder import build_repo_context  # NEW: Rich context extraction
+from app.eca.repo_context_builder import build_repo_context
+from app.eca.api_extractor import extract_api_endpoints
+from app.eca.dependency_extractor import extract_dependencies
+from app.eca.evidence_manifest import build_evidence_manifest
 from app.context.aggregator import aggregate_context
 from app.context.normalizer import normalize_context
 
@@ -116,6 +119,16 @@ def run_end_to_end(repo_url: str, output_dir: str):
                   f"SUCCESS (README: {repo_context['intent_signals'].get('source', 'none')}, "
                   f"no_readme={repo_context['no_readme']})")
 
+        log_stage("3.6", "RepoEvidenceManifest")
+        api_data  = extract_api_endpoints(dest_repo_dir)
+        dep_data  = extract_dependencies(dest_repo_dir)
+        evidence  = build_evidence_manifest(dest_repo_dir, api_data, dep_data)
+        log_stage("3.6", "RepoEvidenceManifest",
+                  f"SUCCESS (platform={evidence['platform']}, "
+                  f"http_api={evidence['has_http_api']}, "
+                  f"android={evidence['has_android']}, "
+                  f"docker={evidence['has_docker']}, k8s={evidence['has_kubernetes']})")
+
         log_stage("4", "ContextAggregator & Normalizer")
         aggregated_data = aggregate_context(chunks_data)
         normalized_data = normalize_context(aggregated_data)
@@ -151,8 +164,8 @@ def run_end_to_end(repo_url: str, output_dir: str):
         val_feats_list = val_feats["validated_features"]
 
         log_stage("7", "ProductUnderstandingAgent")
-        # Pass repo_context so LLM archetype detection has README as primary signal
-        prod_result = understand_product(val_feats_list, repo_context=repo_context)
+        # Pass repo_context AND evidence so archetype detection has both README and structured facts
+        prod_result = understand_product(val_feats_list, repo_context=repo_context, evidence=evidence)
         prod_dict = prod_result.model_dump()
         log_stage("7", "ProductUnderstandingAgent", f"SUCCESS (Archetype: {prod_dict['product']['name']})")
 
@@ -204,7 +217,8 @@ def run_end_to_end(repo_url: str, output_dir: str):
                 features=enriched_feat_list,
                 fr_dict=fr_dict,
                 nfr_dict=nfr_dict,
-                repo_context=repo_context,   # NEW: pass full context so README reaches all 7 enrichment calls
+                repo_context=repo_context,
+                evidence=evidence,
             )
         except Exception as e:
             print(f"[BRD ENRICHMENT] Phase 3.7 failed, continuing without enrichment. Error: {e}")
@@ -215,6 +229,7 @@ def run_end_to_end(repo_url: str, output_dir: str):
             features=enriched_feat_list,
             functional_requirements=fr_dict["functional_requirements"],
             non_functional_requirements=nfr_dict["non_functional_requirements"],
+            evidence=evidence,
         )
         
         loop_result = run_fix_loop(
@@ -222,6 +237,7 @@ def run_end_to_end(repo_url: str, output_dir: str):
             max_iterations=2,
             features=enriched_feat_list,
             functional_requirements=fr_dict["functional_requirements"],
+            evidence=evidence,
         )
         final_markdown = loop_result["final_markdown"]
         final_val = loop_result["final_validation"]

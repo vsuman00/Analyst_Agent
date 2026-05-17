@@ -370,6 +370,68 @@ def _score_section_depth(brd: str) -> Tuple[float, List[str]]:
 
 
 # ---------------------------------------------------------------------------
+# Dimension 9: Tech Grounding (evidence-aware)
+# ---------------------------------------------------------------------------
+
+# Terms whose presence in the BRD must be grounded by actual repo evidence
+_TECH_GROUNDING_CHECKS = [
+    # (brd_term,           evidence_key,        evidence_must_be_true)
+    ("Kubernetes",         "has_kubernetes",     True),
+    ("k8s",               "has_kubernetes",     True),
+    ("Docker",            "has_docker",         True),
+    ("Dockerfile",        "has_docker",         True),
+    ("GDPR",              "has_gdpr_mention",   True),
+    ("CCPA",              "has_gdpr_mention",   True),
+    ("REST API",          "has_http_api",       True),
+    ("RESTful",           "has_http_api",       True),
+    ("gRPC",              "has_grpc",           True),
+    ("Android",           "has_android",        True),
+    ("Google Play",       "has_android",        True),
+    ("App Store",         "has_ios",            True),
+    ("iOS",               "has_ios",            True),
+]
+
+
+def _score_tech_grounding(
+    brd: str,
+    evidence: Dict,
+) -> Tuple[float, List[str]]:
+    """
+    Dimension 9: Verify that technology claims in the BRD are grounded in the
+    RepoEvidenceManifest. Checks for phantom tech mentions (e.g., Kubernetes
+    written in the BRD when no k8s manifests exist in the repo).
+
+    Returns a score of 1.0 if all claims are grounded (or no evidence dict
+    provided). Deducts proportionally for each phantom claim found.
+    """
+    if not evidence:
+        return 1.0, []  # no evidence dict → cannot check, pass through
+
+    issues = []
+    total_checks = 0
+    failed = 0
+
+    for brd_term, ev_key, required_true in _TECH_GROUNDING_CHECKS:
+        # Only check if the term actually appears in the BRD
+        if brd_term.lower() not in brd.lower():
+            continue
+        total_checks += 1
+        actual = bool(evidence.get(ev_key, False))
+        if required_true and not actual:
+            issues.append(
+                f"[GROUNDING] BRD mentions '{brd_term}' but evidence key '{ev_key}' is False. "
+                "This claim may not be supported by the repository."
+            )
+            failed += 1
+
+    if total_checks == 0:
+        return 1.0, []
+
+    score = round(1.0 - (failed / total_checks), 4)
+    return score, issues
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -377,33 +439,37 @@ def validate_brd(
     brd_markdown: str,
     features: List[Dict],
     functional_requirements: List[Dict],
+    evidence: Dict = None,
 ) -> BRDValidationResult:
     """
     Run all scoring dimensions and return an aggregated result.
 
-    Dimensions (8 total, equal weight):
-      1. Completeness    — all required section headings present
-      2. Traceability    — every input feature/FR referenced in the BRD
-      3. No-Hallucination — no phantom FR-IDs in the BRD
-      4. Clarity         — no banned vague phrases
-      5. FR Testability  — FRs contain testable verbs (SHALL, MUST, etc.)
-      6. NFR Specificity — NFR SLAs have real values, not 'Strict'/'TBD'
+    Dimensions (9 total, equal weight):
+      1. Completeness         — all required section headings present
+      2. Traceability         — every input feature/FR referenced in the BRD
+      3. No-Hallucination     — no phantom FR-IDs in the BRD
+      4. Clarity              — no banned vague phrases
+      5. FR Testability       — FRs contain testable verbs (SHALL, MUST, etc.)
+      6. NFR Specificity      — NFR SLAs have real values, not 'Strict'/'TBD'
       7. Stakeholder Specificity — roles are project-specific, not generic
-      8. Section Depth   — every section has meaningful content (word count)
+      8. Section Depth        — every section has meaningful content (word count)
+      9. Tech Grounding       — BRD tech claims backed by evidence manifest
     """
+    evidence = evidence or {}
     all_issues: List[str] = []
 
-    # Original 4 dimensions
+    # Dimensions 1–8 (structural)
     completeness_score,    completeness_issues    = _score_completeness(brd_markdown)
     traceability_score,    traceability_issues    = _score_traceability(brd_markdown, features, functional_requirements)
     no_halluc_score,       no_halluc_issues       = _score_no_hallucination(brd_markdown, features, functional_requirements)
     clarity_score,         clarity_issues         = _score_clarity(brd_markdown)
-
-    # New 4 dimensions
     fr_test_score,         fr_test_issues         = _score_fr_testability(brd_markdown)
     nfr_spec_score,        nfr_spec_issues        = _score_nfr_specificity(brd_markdown)
     stakeholder_score,     stakeholder_issues     = _score_stakeholder_specificity(brd_markdown)
     depth_score,           depth_issues           = _score_section_depth(brd_markdown)
+
+    # Dimension 9 (evidence-aware)
+    grounding_score,       grounding_issues       = _score_tech_grounding(brd_markdown, evidence)
 
     all_issues.extend(completeness_issues)
     all_issues.extend(traceability_issues)
@@ -413,13 +479,15 @@ def validate_brd(
     all_issues.extend(nfr_spec_issues)
     all_issues.extend(stakeholder_issues)
     all_issues.extend(depth_issues)
+    all_issues.extend(grounding_issues)
 
-    # Equal-weight average across all 8 dimensions
+    # Equal-weight average across all 9 dimensions
     aggregate_score = round(
         (
             completeness_score + traceability_score + no_halluc_score + clarity_score
             + fr_test_score + nfr_spec_score + stakeholder_score + depth_score
-        ) / 8,
+            + grounding_score
+        ) / 9,
         4
     )
 

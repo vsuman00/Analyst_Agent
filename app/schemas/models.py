@@ -245,3 +245,62 @@ class BRDValidationResult(BaseModel):
     score: float
     issues: List[str]
     needs_revision: bool
+
+
+# ---------------------------------------------------------------------------
+# RepoEvidenceManifest — assembled by evidence_manifest.py
+# ---------------------------------------------------------------------------
+
+class DepCategories(BaseModel):
+    """Dependency names grouped by role, derived from build file analysis."""
+    database:  List[str] = Field(default_factory=list)
+    auth:      List[str] = Field(default_factory=list)
+    grpc:      List[str] = Field(default_factory=list)
+    infra:     List[str] = Field(default_factory=list)
+    framework: List[str] = Field(default_factory=list)
+    other:     List[str] = Field(default_factory=list)
+
+
+class RepoEvidence(BaseModel):
+    """
+    Structured evidence about what a repository ACTUALLY contains.
+
+    Assembled by evidence_manifest.build_evidence_manifest() from:
+      - api_extractor output    → HTTP endpoints and gRPC definitions
+      - dependency_extractor    → declared libraries and their categories
+      - file system scan        → Dockerfile, AndroidManifest.xml, k8s/ dir, etc.
+      - README/docs text scan   → GDPR/PII/compliance keyword mentions
+
+    Every downstream stage (BRD composer, archetype detector, validator)
+    queries this model instead of maintaining hardcoded domain-keyword lists.
+    """
+    # API signals
+    has_http_api:     bool = False
+    has_grpc:         bool = False
+    actual_endpoints: List[Dict[str, Any]] = Field(default_factory=list)
+    grpc_rpcs:        List[Dict[str, Any]] = Field(default_factory=list)
+
+    # Dependency signals
+    has_database: bool = False
+    has_auth:     bool = False
+    detected_deps: List[Dict[str, Any]] = Field(default_factory=list)
+    dep_categories: DepCategories = Field(default_factory=DepCategories)
+
+    # Infrastructure signals (from actual files)
+    has_docker:     bool = False
+    has_kubernetes: bool = False
+    infra_files:    List[str] = Field(default_factory=list)
+
+    # Platform signals
+    has_android: bool = False
+    has_ios:     bool = False
+    has_desktop: bool = False
+    platform:    str  = "unknown"  # "android"|"ios"|"desktop"|"web"|"server"|"library"|"unknown"
+
+    # Quality signals
+    has_gdpr_mention: bool = False
+    has_tests:        bool = False
+
+    # Build metadata
+    build_tool:       str = "unknown"
+    primary_language: str = "unknown"

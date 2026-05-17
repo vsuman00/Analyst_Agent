@@ -78,6 +78,7 @@ def run_fix_loop(
     max_iterations: int = 2,
     features: list = None,
     functional_requirements: list = None,
+    evidence: dict = None,
 ) -> Dict[str, Any]:
     """
     Run the validation/fix loop.
@@ -90,11 +91,12 @@ def run_fix_loop(
     """
     features = features or []
     functional_requirements = functional_requirements or []
+    evidence = evidence or {}
     current_markdown = initial_markdown
     iteration = 0
 
     while iteration < max_iterations:
-        val_result = validate_brd(current_markdown, features, functional_requirements)
+        val_result = validate_brd(current_markdown, features, functional_requirements, evidence=evidence)
 
         if not val_result.needs_revision:
             # Score >= 0.85, we are good
@@ -109,7 +111,7 @@ def run_fix_loop(
         iteration += 1
 
     # Max iterations reached, return current state
-    final_val = validate_brd(current_markdown, features, functional_requirements)
+    final_val = validate_brd(current_markdown, features, functional_requirements, evidence=evidence)
     return {
         "final_markdown": current_markdown,
         "final_validation": final_val.model_dump(),
