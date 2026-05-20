@@ -10,6 +10,14 @@ import json
 import argparse
 from pathlib import Path
 
+# Prevent UnicodeEncodeError on Windows command consoles when printing emojis
+if sys.platform.startswith('win'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except AttributeError:
+        pass
+
 # Phase 1: Context Extraction
 from app.eca.repo_scanner import scan_repository
 from app.eca.file_classifier import run_classifier
@@ -79,7 +87,14 @@ def log_stage(stage_num: str, name: str, status: str = "STARTED"):
     else:
         print(f"[{stage_num}/10] \033[91m{name} -> {status}\033[0m")
 
-def run_end_to_end(repo_url: str, output_dir: str):
+def run_full_pipeline_service(repo_url: str, output_dir: str) -> dict:
+    """
+    Executes the full 10-stage end-to-end pipeline (Phase 1 through 4) and returns
+    a dictionary containing all generated contexts, features, requirements, and the finalized BRD.
+    """
+    from app.context.validator import validate_context
+    from app.output.final_output_builder import build_final_output
+
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
@@ -93,214 +108,239 @@ def run_end_to_end(repo_url: str, output_dir: str):
     print(f"📁 Clone Dir: {dest_repo_dir}")
     print("==================================================")
 
+    # ─── PHASE 1: CONTEXT EXTRACTION ─────────────────────────────────────
+    log_stage("1", "RepoScanner")
+    # skip_clone=False ensures we always clone the repo fresh
+    scan_data = scan_repository(repo_url, str(dest_repo_dir), skip_clone=False)
+    if "error" in scan_data:
+        raise RuntimeError(f"RepoScanner failed: {scan_data['error']}")
+    log_stage("1", "RepoScanner", f"SUCCESS (Found {len(scan_data.get('files', []))} files)")
+
+    log_stage("2", "FileClassifier")
+    classified_data = run_classifier(scan_data)
+    log_stage("2", "FileClassifier", "SUCCESS")
+
+    log_stage("3", "ContentProcessor")
+    chunks_data = run_content_processor(classified_data, dest_repo_dir)
+    log_stage("3", "ContentProcessor", f"SUCCESS (Generated {len(chunks_data.get('chunks', []))} chunks)")
+
+    # ── DEBUG: Save raw chunk data for inspection ──────────────────────
+    _chunk_debug_path = out_path / f"{repo_name}_ChunkData.json"
+    with open(_chunk_debug_path, "w", encoding="utf-8") as _f:
+        json.dump(chunks_data, _f, indent=2, default=str)
+    print(f"[DEBUG] Chunk data saved → {_chunk_debug_path}")
+
+    # ─── PHASE 1.5: BUILD RICH REPO CONTEXT ──────────────────────────────
+    # This replaces lossy aggregator→normalizer→module-names as the LLM input.
+    # Produces README, tech_stack, file structure, and key snippets in one object.
+    log_stage("3.5", "RepoContextBuilder")
+    repo_context = build_repo_context(str(dest_repo_dir), chunks_data)
+    log_stage("3.5", "RepoContextBuilder",
+              f"SUCCESS (README: {repo_context['intent_signals'].get('source', 'none')}, "
+              f"no_readme={repo_context['no_readme']})")
+
+    log_stage("3.6", "RepoEvidenceManifest")
+    api_data  = extract_api_endpoints(dest_repo_dir)
+    dep_data  = extract_dependencies(dest_repo_dir)
+    evidence  = build_evidence_manifest(dest_repo_dir, api_data, dep_data)
+    log_stage("3.6", "RepoEvidenceManifest",
+              f"SUCCESS (platform={evidence['platform']}, "
+              f"http_api={evidence['has_http_api']}, "
+              f"android={evidence['has_android']}, "
+              f"docker={evidence['has_docker']}, k8s={evidence['has_kubernetes']})")
+
+    # ── DEBUG: Save the two primary LLM inputs produced after ECA ──────────
+    # repo_context  → used by FeatureExtractionAgent, ProductUnderstandingAgent,
+    #                  BRDEnrichmentAgent as the main grounding document
+    # evidence      → used by BRDComposer & grounding validator
+    for _fname, _data in [
+        (f"{repo_name}_repo_context.json", repo_context),
+        (f"{repo_name}_evidence.json",     evidence),
+    ]:
+        _fpath = out_path / _fname
+        with open(_fpath, "w", encoding="utf-8") as _f:
+            json.dump(_data, _f, indent=2, default=str)
+        print(f"[DEBUG] Saved -> {_fpath}")
+
+    log_stage("4", "ContextAggregator & Normalizer")
+    aggregated_data = aggregate_context(chunks_data)
+    normalized_data = normalize_context(aggregated_data)
+    norm_modules = normalized_data.get("normalized_modules", [])
+    log_stage("4", "ContextAggregator", f"SUCCESS ({len(norm_modules)} modules)")
+
+    # ── DEBUG: Save aggregated & normalized context to JSON ────────────────
+    for _fname, _data in [
+        (f"{repo_name}_aggregated_data.json", aggregated_data),
+        (f"{repo_name}_normalized_data.json", normalized_data),
+    ]:
+        _fpath = out_path / _fname
+        with open(_fpath, "w", encoding="utf-8") as _f:
+            json.dump(_data, _f, indent=2, default=str)
+        print(f"[DEBUG] Saved -> {_fpath}")
+
+    # ─── PHASE 2: ANALYSIS & FEATURE EXTRACTION ─────────────────────────
+    log_stage("5", "FeatureExtractionAgent")
+    chunks_list = chunks_data.get("chunks", [])
+    # Pass repo_context as primary LLM input (README, structure, snippets)
+    feat_ext_result = extract_features(norm_modules, chunks_list, repo_context=repo_context)
+    raw_feats = feat_ext_result.model_dump()
+    log_stage("5", "FeatureExtractionAgent", f"SUCCESS ({len(raw_feats['features'])} raw features)")
+
+    log_stage("6", "FeatureValidator")
+    feat_val_result = validate_features(raw_feats["features"])
+    val_feats = feat_val_result.model_dump()
+    val_feats_list = val_feats["validated_features"]
+    log_stage("6", "FeatureValidator", f"SUCCESS ({len(val_feats_list)} validated features)")
+
+    # ─── PHASE 2.5: PRUNE HALLUCINATIONS ───────────────────────────────
+    log_stage("6.5", "Semantic Feature Pruning (LLM)")
+    import os
+    if os.environ.get("OPENAI_API_KEY"):
+        from app.utils.llm_enrichment import prune_hallucinated_features
+        # Pass full repo_context so pruning uses README as primary signal
+        pruned_feats = prune_hallucinated_features(val_feats_list, repo_context)
+        val_feats["validated_features"] = pruned_feats
+        log_stage("6.5", "Semantic Feature Pruning (LLM)", f"SUCCESS ({len(pruned_feats)} features remain)")
+    else:
+        log_stage("6.5", "Semantic Feature Pruning (LLM)", "SKIPPED (No API Key)")
+
+    val_feats_list = val_feats["validated_features"]
+
+    log_stage("7", "ProductUnderstandingAgent")
+    # Pass repo_context AND evidence so archetype detection has both README and structured facts
+    prod_result = understand_product(val_feats_list, repo_context=repo_context, evidence=evidence)
+    prod_dict = prod_result.model_dump()
+    log_stage("7", "ProductUnderstandingAgent", f"SUCCESS (Archetype: {prod_dict['product']['name']})")
+
+    # ─── PHASE 3: REQUIREMENT GENERATION ─────────────────────────────────
+    log_stage("8", "FunctionalRequirementGenerator")
+    fr_result = generate_requirements(val_feats_list)
+    fr_dict = fr_result.model_dump()
+    log_stage("8", "FunctionalRequirementGenerator", f"SUCCESS ({len(fr_dict['functional_requirements'])} FRs)")
+
+    log_stage("9", "NonFunctionalRequirementGenerator")
+    system_type = prod_dict['product']['name']
+    # Use the rich tech_stack from RepoContextBuilder (dict with language/framework/platform).
+    # scan_data does NOT populate a tech_stack field — using it always yielded an empty list,
+    # causing the NFR generator to default to generic cloud-native requirements for every repo.
+    tech_stack_nfr = repo_context.get("tech_stack", {})
+    nfr_result = generate_nfrs(system_type=system_type, tech_stack=tech_stack_nfr)
+    nfr_dict = nfr_result.model_dump()
+    log_stage("9", "NonFunctionalRequirementGenerator", f"SUCCESS ({len(nfr_dict['non_functional_requirements'])} NFRs)")
+
+    # ─── PHASE 3.5: LLM ENRICHMENT ───────────────────────────────────
+    enriched_feat_list, prod_dict, artifacts = _try_enrich(
+        val_feats_list, prod_dict, tech_stack_nfr
+    )
+    val_feats["validated_features"] = enriched_feat_list
+
+    # ─── PHASE 3.6: BUSINESS UNDERSTANDING ─────────────────────────────
+    # FIX (Bug 1.3): Call BusinessUnderstandingAgent explicitly so
+    # compose_brd() receives product_type, primary_users, core_value.
+    biz_result = understand_business(
+        enriched_feat_list,
+        system_type=prod_dict['product']['name']
+    )
+    biz_ctx = biz_result.model_dump()["business_context"]
+    # Merge product summary into business context for Executive Summary richness
+    biz_ctx["product_summary"] = prod_dict["product"].get("summary", "")
+    biz_ctx["core_capabilities"] = prod_dict["product"].get("core_capabilities", [])
+    biz_ctx["repo_name"] = scan_data.get("repo_name", "Unknown Repository")
+    biz_ctx["tech_stack"] = tech_stack_nfr
+    biz_ctx["enterprise_artifacts"] = artifacts
+
+    # ─── PHASE 3.7: BRD DEEP ENRICHMENT ─────────────────────────────────
+    # Injects detailed, grounded LLM content into biz_ctx for every BRD section.
+    # Dual-layer writing: plain English for business + technical note for engineers.
+    # Falls back gracefully if OPENAI_API_KEY is not set or any call fails.
     try:
-        # ─── PHASE 1: CONTEXT EXTRACTION ─────────────────────────────────────
-        log_stage("1", "RepoScanner")
-        # skip_clone=False ensures we always clone the repo fresh
-        scan_data = scan_repository(repo_url, str(dest_repo_dir), skip_clone=False)
-        if "error" in scan_data:
-            raise RuntimeError(f"RepoScanner failed: {scan_data['error']}")
-        log_stage("1", "RepoScanner", f"SUCCESS (Found {len(scan_data.get('files', []))} files)")
-
-        log_stage("2", "FileClassifier")
-        classified_data = run_classifier(scan_data)
-        log_stage("2", "FileClassifier", "SUCCESS")
-
-        log_stage("3", "ContentProcessor")
-        chunks_data = run_content_processor(classified_data, dest_repo_dir)
-        log_stage("3", "ContentProcessor", f"SUCCESS (Generated {len(chunks_data.get('chunks', []))} chunks)")
-
-        # ── DEBUG: Save raw chunk data for inspection ──────────────────────
-        _chunk_debug_path = out_path / f"{repo_name}_ChunkData.json"
-        with open(_chunk_debug_path, "w", encoding="utf-8") as _f:
-            json.dump(chunks_data, _f, indent=2, default=str)
-        print(f"[DEBUG] Chunk data saved → {_chunk_debug_path}")
-
-        # ─── PHASE 1.5: BUILD RICH REPO CONTEXT ──────────────────────────────
-        # This replaces lossy aggregator→normalizer→module-names as the LLM input.
-        # Produces README, tech_stack, file structure, and key snippets in one object.
-        log_stage("3.5", "RepoContextBuilder")
-        repo_context = build_repo_context(str(dest_repo_dir), chunks_data)
-        log_stage("3.5", "RepoContextBuilder",
-                  f"SUCCESS (README: {repo_context['intent_signals'].get('source', 'none')}, "
-                  f"no_readme={repo_context['no_readme']})")
-
-        log_stage("3.6", "RepoEvidenceManifest")
-        api_data  = extract_api_endpoints(dest_repo_dir)
-        dep_data  = extract_dependencies(dest_repo_dir)
-        evidence  = build_evidence_manifest(dest_repo_dir, api_data, dep_data)
-        log_stage("3.6", "RepoEvidenceManifest",
-                  f"SUCCESS (platform={evidence['platform']}, "
-                  f"http_api={evidence['has_http_api']}, "
-                  f"android={evidence['has_android']}, "
-                  f"docker={evidence['has_docker']}, k8s={evidence['has_kubernetes']})")
-
-        # ── DEBUG: Save the two primary LLM inputs produced after ECA ──────────
-        # repo_context  → used by FeatureExtractionAgent, ProductUnderstandingAgent,
-        #                  BRDEnrichmentAgent as the main grounding document
-        # evidence      → used by BRDComposer & grounding validator
-        for _fname, _data in [
-            (f"{repo_name}_repo_context.json", repo_context),
-            (f"{repo_name}_evidence.json",     evidence),
-        ]:
-            _fpath = out_path / _fname
-            with open(_fpath, "w", encoding="utf-8") as _f:
-                json.dump(_data, _f, indent=2, default=str)
-            print(f"[DEBUG] Saved -> {_fpath}")
-
-        log_stage("4", "ContextAggregator & Normalizer")
-        aggregated_data = aggregate_context(chunks_data)
-        normalized_data = normalize_context(aggregated_data)
-        norm_modules = normalized_data.get("normalized_modules", [])
-        log_stage("4", "ContextAggregator", f"SUCCESS ({len(norm_modules)} modules)")
-
-        # ── DEBUG: Save aggregated & normalized context to JSON ────────────────
-        for _fname, _data in [
-            (f"{repo_name}_aggregated_data.json", aggregated_data),
-            (f"{repo_name}_normalized_data.json", normalized_data),
-        ]:
-            _fpath = out_path / _fname
-            with open(_fpath, "w", encoding="utf-8") as _f:
-                json.dump(_data, _f, indent=2, default=str)
-            print(f"[DEBUG] Saved -> {_fpath}")
-
-        # ─── PHASE 2: ANALYSIS & FEATURE EXTRACTION ─────────────────────────
-        log_stage("5", "FeatureExtractionAgent")
-        chunks_list = chunks_data.get("chunks", [])
-        # Pass repo_context as primary LLM input (README, structure, snippets)
-        feat_ext_result = extract_features(norm_modules, chunks_list, repo_context=repo_context)
-        raw_feats = feat_ext_result.model_dump()
-        log_stage("5", "FeatureExtractionAgent", f"SUCCESS ({len(raw_feats['features'])} raw features)")
-
-        log_stage("6", "FeatureValidator")
-        feat_val_result = validate_features(raw_feats["features"])
-        val_feats = feat_val_result.model_dump()
-        val_feats_list = val_feats["validated_features"]
-        log_stage("6", "FeatureValidator", f"SUCCESS ({len(val_feats_list)} validated features)")
-
-        # ─── PHASE 2.5: PRUNE HALLUCINATIONS ───────────────────────────────
-        log_stage("6.5", "Semantic Feature Pruning (LLM)")
-        import os
-        if os.environ.get("OPENAI_API_KEY"):
-            from app.utils.llm_enrichment import prune_hallucinated_features
-            # Pass full repo_context so pruning uses README as primary signal
-            pruned_feats = prune_hallucinated_features(val_feats_list, repo_context)
-            val_feats["validated_features"] = pruned_feats
-            log_stage("6.5", "Semantic Feature Pruning (LLM)", f"SUCCESS ({len(pruned_feats)} features remain)")
-        else:
-            log_stage("6.5", "Semantic Feature Pruning (LLM)", "SKIPPED (No API Key)")
-
-        val_feats_list = val_feats["validated_features"]
-
-        log_stage("7", "ProductUnderstandingAgent")
-        # Pass repo_context AND evidence so archetype detection has both README and structured facts
-        prod_result = understand_product(val_feats_list, repo_context=repo_context, evidence=evidence)
-        prod_dict = prod_result.model_dump()
-        log_stage("7", "ProductUnderstandingAgent", f"SUCCESS (Archetype: {prod_dict['product']['name']})")
-
-        # ─── PHASE 3: REQUIREMENT GENERATION ─────────────────────────────────
-        log_stage("8", "FunctionalRequirementGenerator")
-        fr_result = generate_requirements(val_feats_list)
-        fr_dict = fr_result.model_dump()
-        log_stage("8", "FunctionalRequirementGenerator", f"SUCCESS ({len(fr_dict['functional_requirements'])} FRs)")
-
-        log_stage("9", "NonFunctionalRequirementGenerator")
-        system_type = prod_dict['product']['name']
-        # Use the rich tech_stack from RepoContextBuilder (dict with language/framework/platform).
-        # scan_data does NOT populate a tech_stack field — using it always yielded an empty list,
-        # causing the NFR generator to default to generic cloud-native requirements for every repo.
-        tech_stack_nfr = repo_context.get("tech_stack", {})
-        nfr_result = generate_nfrs(system_type=system_type, tech_stack=tech_stack_nfr)
-        nfr_dict = nfr_result.model_dump()
-        log_stage("9", "NonFunctionalRequirementGenerator", f"SUCCESS ({len(nfr_dict['non_functional_requirements'])} NFRs)")
-
-        # ─── PHASE 3.5: LLM ENRICHMENT ───────────────────────────────────
-        enriched_feat_list, prod_dict, artifacts = _try_enrich(
-            val_feats_list, prod_dict, tech_stack_nfr
-        )
-        val_feats["validated_features"] = enriched_feat_list
-
-        # ─── PHASE 3.6: BUSINESS UNDERSTANDING ─────────────────────────────
-        # FIX (Bug 1.3): Call BusinessUnderstandingAgent explicitly so
-        # compose_brd() receives product_type, primary_users, core_value.
-        biz_result = understand_business(
-            enriched_feat_list,
-            system_type=prod_dict['product']['name']
-        )
-        biz_ctx = biz_result.model_dump()["business_context"]
-        # Merge product summary into business context for Executive Summary richness
-        biz_ctx["product_summary"] = prod_dict["product"].get("summary", "")
-        biz_ctx["core_capabilities"] = prod_dict["product"].get("core_capabilities", [])
-        biz_ctx["repo_name"] = scan_data.get("repo_name", "Unknown Repository")
-        biz_ctx["tech_stack"] = tech_stack_nfr
-        biz_ctx["enterprise_artifacts"] = artifacts
-
-        # ─── PHASE 3.7: BRD DEEP ENRICHMENT ─────────────────────────────────
-        # Injects detailed, grounded LLM content into biz_ctx for every BRD section.
-        # Dual-layer writing: plain English for business + technical note for engineers.
-        # Falls back gracefully if OPENAI_API_KEY is not set or any call fails.
-        try:
-            from app.analysis.brd_enrichment_agent import enrich_brd_context
-            biz_ctx = enrich_brd_context(
-                biz_ctx=biz_ctx,
-                features=enriched_feat_list,
-                fr_dict=fr_dict,
-                nfr_dict=nfr_dict,
-                repo_context=repo_context,
-                evidence=evidence,
-            )
-        except Exception as e:
-            print(f"[BRD ENRICHMENT] Phase 3.7 failed, continuing without enrichment. Error: {e}")
-        log_stage("10", "BRDComposer & FixLoop")
-        # FIX (Bug 1.1): Pass correct keyword argument names matching compose_brd() signature.
-        initial_markdown = compose_brd(
-            business_context=biz_ctx,
+        from app.analysis.brd_enrichment_agent import enrich_brd_context
+        biz_ctx = enrich_brd_context(
+            biz_ctx=biz_ctx,
             features=enriched_feat_list,
-            functional_requirements=fr_dict["functional_requirements"],
-            non_functional_requirements=nfr_dict["non_functional_requirements"],
-            evidence=evidence,
+            fr_dict=fr_dict,
+            nfr_dict=nfr_dict,
+            repo_context=repo_context,
         )
-        
-        loop_result = run_fix_loop(
-            initial_markdown,
-            max_iterations=2,
-            features=enriched_feat_list,
-            functional_requirements=fr_dict["functional_requirements"],
-            evidence=evidence,
-        )
-        final_markdown = loop_result["final_markdown"]
-        final_val = loop_result["final_validation"]
-        
-        score = final_val["score"]
-        status = "PASSED" if score >= 0.85 else "FAILED"
-        log_stage("10", "BRDComposer & FixLoop", f"SUCCESS ({status} with score {score:.2f})")
+    except Exception as e:
+        print(f"[BRD ENRICHMENT] Phase 3.7 failed, continuing without enrichment. Error: {e}")
+    log_stage("10", "BRDComposer & FixLoop")
+    # FIX (Bug 1.1): Pass correct keyword argument names matching compose_brd() signature.
+    initial_markdown = compose_brd(
+        business_context=biz_ctx,
+        features=enriched_feat_list,
+        functional_requirements=fr_dict["functional_requirements"],
+        non_functional_requirements=nfr_dict["non_functional_requirements"],
+        evidence=evidence,
+    )
+    
+    loop_result = run_fix_loop(
+        initial_markdown,
+        max_iterations=2,
+        features=enriched_feat_list,
+        functional_requirements=fr_dict["functional_requirements"],
+        evidence=evidence,
+    )
+    final_markdown = loop_result["final_markdown"]
+    final_val = loop_result["final_validation"]
+    
+    score = final_val["score"]
+    status = "PASSED" if score >= 0.85 else "FAILED"
+    log_stage("10", "BRDComposer & FixLoop", f"SUCCESS ({status} with score {score:.2f})")
 
-        if final_val["issues"]:
-            print("⚠️ Remaining Issues:")
-            for issue in final_val["issues"]:
-                print(f"   - {issue}")
+    if final_val["issues"]:
+        print("⚠️ Remaining Issues:")
+        for issue in final_val["issues"]:
+            print(f"   - {issue}")
 
-        # ─── OUTPUT ─────────────────────────────────────────────────────────
-        # Use a repo-specific filename so successive runs don't overwrite each other
-        brd_out_path = out_path / f"BRD_{repo_name}.md"
+    # Build standard Phase 1 canonical final payload for complete compatibility
+    validation_data = validate_context(normalized_data)
+    final_payload = build_final_output(
+        scan_data,
+        classified_data,
+        chunks_data,
+        normalized_data,
+        validation_data
+    )
+
+    # ── DEBUG: Save final payload and validation data to JSON ─────────────
+    _final_payload_debug = {
+        "business_context": biz_ctx,
+        "features": enriched_feat_list,
+        "functional_requirements": fr_dict["functional_requirements"],
+        "non_functional_requirements": nfr_dict["non_functional_requirements"],
+    }
+    for _fname, _data in [
+        (f"{repo_name}_final_payload.json",    _final_payload_debug),
+        (f"{repo_name}_validation_data.json",  final_val),
+    ]:
+        _fpath = out_path / _fname
+        with open(_fpath, "w", encoding="utf-8") as _f:
+            json.dump(_data, _f, indent=2, default=str)
+        print(f"[DEBUG] Saved -> {_fpath}")
+
+    return {
+        "final_payload": final_payload,
+        "final_markdown": final_markdown,
+        "final_validation": final_val,
+        "biz_ctx": biz_ctx,
+        "features": enriched_feat_list,
+        "functional_requirements": fr_dict["functional_requirements"],
+        "non_functional_requirements": nfr_dict["non_functional_requirements"],
+        "repo_name": repo_name
+    }
+
+
+def run_end_to_end(repo_url: str, output_dir: str):
+    try:
+        res = run_full_pipeline_service(repo_url, output_dir)
+        final_markdown = res["final_markdown"]
+        repo_name = res["repo_name"]
+
+        # Save final BRD output file
+        brd_out_path = Path(output_dir) / f"BRD_{repo_name}.md"
         with open(brd_out_path, "w", encoding="utf-8") as f:
             f.write(final_markdown)
-
-        # ── DEBUG: Save final payload and validation data to JSON ─────────────
-        _final_payload_debug = {
-            "business_context": biz_ctx,
-            "features": enriched_feat_list,
-            "functional_requirements": fr_dict["functional_requirements"],
-            "non_functional_requirements": nfr_dict["non_functional_requirements"],
-        }
-        for _fname, _data in [
-            (f"{repo_name}_final_payload.json",    _final_payload_debug),
-            (f"{repo_name}_validation_data.json",  final_val),
-        ]:
-            _fpath = out_path / _fname
-            with open(_fpath, "w", encoding="utf-8") as _f:
-                json.dump(_data, _f, indent=2, default=str)
-            print(f"[DEBUG] Saved -> {_fpath}")
 
         print("\n==================================================")
         print("BRD PIPELINE COMPLETED SUCCESSFULLY")
@@ -314,6 +354,7 @@ def run_end_to_end(repo_url: str, output_dir: str):
         traceback.print_exc()
         print("==================================================\n")
         sys.exit(1)
+
 
 def run_pipeline(repo_url: str, output_path: str = None) -> dict:
     """
