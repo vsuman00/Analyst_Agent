@@ -12,13 +12,15 @@ Output:
   - brd_output.docx  (written to --out path or current working directory)
 
 Markdown → .docx Mapping:
-  # Title         → Title style (bold, 20pt)
+  # Title         → Title style (bold, 22pt)
   ## Heading      → Heading 1
   ### Subheading  → Heading 2
+  #### Subsub     → Heading 3
   | Table |       → docx Table (styled, with header row shading)
   - Bullet        → List Bullet style
+  1. Numbered     → List Number style
   **bold**        → inline bold run
-  _italic_        → inline italic run
+  *italic* / _it_ → inline italic run
   `code`          → inline monospace run (Courier New)
   ---             → paragraph page-separator rule (no new page)
   Plain text      → Normal paragraph
@@ -105,29 +107,36 @@ def _add_hr(doc: Document):
 
 def _apply_inline_markup(run_container, text: str):
     """
-    Parse inline markdown (**bold**, _italic_, `code`) and add styled runs.
-    All other text is added as a plain run.
+    Parse inline markdown and add styled runs:
+      **bold**, *italic*, _italic_, `code`, plain text.
     """
-    # Pattern captures: **bold**, _italic_, `code`, and plain text segments
-    token_re = re.compile(r'\*\*(.+?)\*\*|_(.+?)_|`(.+?)`|([^*_`]+)')
+    # Order matters: bold (**...**) must be tried before single-asterisk italic.
+    # Plain-text group must NOT consume lone '*' so the italic branch can claim it.
+    token_re = re.compile(
+        r'\*\*(.+?)\*\*'              # group 1: **bold**
+        r'|\*([^*\n]+?)\*'            # group 2: *italic*
+        r'|_([^_\n]+?)_'              # group 3: _italic_
+        r'|`([^`\n]+?)`'              # group 4: `code`
+        r'|([^*_`]+)'                 # group 5: plain text (no *, _, `)
+    )
     for m in token_re.finditer(text):
-        bold_text, italic_text, code_text, plain_text = m.groups()
-        if bold_text is not None:
-            r = run_container.add_run(bold_text)
+        bold, ast_it, und_it, code, plain = m.groups()
+        if bold is not None:
+            r = run_container.add_run(bold)
             r.bold = True
             r.font.name = FONT_BODY
             r.font.size = Pt(SIZE_BODY)
-        elif italic_text is not None:
-            r = run_container.add_run(italic_text)
+        elif ast_it is not None or und_it is not None:
+            r = run_container.add_run(ast_it if ast_it is not None else und_it)
             r.italic = True
             r.font.name = FONT_BODY
             r.font.size = Pt(SIZE_BODY)
-        elif code_text is not None:
-            r = run_container.add_run(code_text)
+        elif code is not None:
+            r = run_container.add_run(code)
             r.font.name = FONT_MONO
             r.font.size = Pt(SIZE_BODY - 1)
-        elif plain_text is not None:
-            r = run_container.add_run(plain_text)
+        elif plain is not None:
+            r = run_container.add_run(plain)
             r.font.name = FONT_BODY
             r.font.size = Pt(SIZE_BODY)
 
@@ -247,7 +256,7 @@ def markdown_to_docx(brd_markdown: str, out_path: Path) -> None:
             continue
 
         # ── H3 — Subsection headings ─────────────────────────────────────
-        if line.startswith("### "):
+        if line.startswith("### ") and not line.startswith("#### "):
             text = line[4:].strip()
             p = doc.add_heading(level=2)
             p.clear()
@@ -261,6 +270,21 @@ def markdown_to_docx(brd_markdown: str, out_path: Path) -> None:
             i += 1
             continue
 
+        # ── H4 — Sub-subsection headings ─────────────────────────────────
+        if line.startswith("#### "):
+            text = line[5:].strip()
+            p = doc.add_heading(level=3)
+            p.clear()
+            p.paragraph_format.space_before = Pt(8)
+            p.paragraph_format.space_after  = Pt(2)
+            r = p.add_run(text)
+            r.bold            = True
+            r.font.name       = FONT_HEADING
+            r.font.size       = Pt(SIZE_BODY + 1)
+            r.font.color.rgb  = RGBColor(0x40, 0x40, 0x40)
+            i += 1
+            continue
+
         # ── Bullet points ────────────────────────────────────────────────
         if line.startswith("- ") or line.startswith("* "):
             text = line[2:].strip()
@@ -271,9 +295,19 @@ def markdown_to_docx(brd_markdown: str, out_path: Path) -> None:
             i += 1
             continue
 
+        # ── Numbered list items (1. Item) ────────────────────────────────
+        numbered = re.match(r'^(\d+)\.\s+(.*)', line)
+        if numbered:
+            p = doc.add_paragraph(style="List Number")
+            p.paragraph_format.left_indent = Inches(0.25)
+            p.paragraph_format.space_after = Pt(2)
+            _apply_inline_markup(p, numbered.group(2).strip())
+            i += 1
+            continue
+
         # ── Metadata key-value lines (bold label: value) ─────────────────
         # e.g.  "**Document Type:** Business Requirement Document  "
-        bold_kv = re.match(r'^\*\*(.+?)\*\*\s*[:\—]\s*(.*)', line)
+        bold_kv = re.match(r'^\*\*(.+?)\*\*\s*[:\u2014\-]\s*(.*)', line)
         if bold_kv:
             p = doc.add_paragraph()
             p.paragraph_format.space_before = Pt(1)
@@ -282,9 +316,7 @@ def markdown_to_docx(brd_markdown: str, out_path: Path) -> None:
             label_run.bold       = True
             label_run.font.name  = FONT_BODY
             label_run.font.size  = Pt(SIZE_BODY)
-            val_run = p.add_run(bold_kv.group(2).rstrip())
-            val_run.font.name    = FONT_BODY
-            val_run.font.size    = Pt(SIZE_BODY)
+            _apply_inline_markup(p, bold_kv.group(2).rstrip())
             i += 1
             continue
 
