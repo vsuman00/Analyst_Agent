@@ -110,6 +110,12 @@ def run_end_to_end(repo_url: str, output_dir: str):
         chunks_data = run_content_processor(classified_data, dest_repo_dir)
         log_stage("3", "ContentProcessor", f"SUCCESS (Generated {len(chunks_data.get('chunks', []))} chunks)")
 
+        # ── DEBUG: Save raw chunk data for inspection ──────────────────────
+        _chunk_debug_path = out_path / f"{repo_name}_ChunkData.json"
+        with open(_chunk_debug_path, "w", encoding="utf-8") as _f:
+            json.dump(chunks_data, _f, indent=2, default=str)
+        print(f"[DEBUG] Chunk data saved → {_chunk_debug_path}")
+
         # ─── PHASE 1.5: BUILD RICH REPO CONTEXT ──────────────────────────────
         # This replaces lossy aggregator→normalizer→module-names as the LLM input.
         # Produces README, tech_stack, file structure, and key snippets in one object.
@@ -129,11 +135,34 @@ def run_end_to_end(repo_url: str, output_dir: str):
                   f"android={evidence['has_android']}, "
                   f"docker={evidence['has_docker']}, k8s={evidence['has_kubernetes']})")
 
+        # ── DEBUG: Save the two primary LLM inputs produced after ECA ──────────
+        # repo_context  → used by FeatureExtractionAgent, ProductUnderstandingAgent,
+        #                  BRDEnrichmentAgent as the main grounding document
+        # evidence      → used by BRDComposer & grounding validator
+        for _fname, _data in [
+            (f"{repo_name}_repo_context.json", repo_context),
+            (f"{repo_name}_evidence.json",     evidence),
+        ]:
+            _fpath = out_path / _fname
+            with open(_fpath, "w", encoding="utf-8") as _f:
+                json.dump(_data, _f, indent=2, default=str)
+            print(f"[DEBUG] Saved -> {_fpath}")
+
         log_stage("4", "ContextAggregator & Normalizer")
         aggregated_data = aggregate_context(chunks_data)
         normalized_data = normalize_context(aggregated_data)
         norm_modules = normalized_data.get("normalized_modules", [])
         log_stage("4", "ContextAggregator", f"SUCCESS ({len(norm_modules)} modules)")
+
+        # ── DEBUG: Save aggregated & normalized context to JSON ────────────────
+        for _fname, _data in [
+            (f"{repo_name}_aggregated_data.json", aggregated_data),
+            (f"{repo_name}_normalized_data.json", normalized_data),
+        ]:
+            _fpath = out_path / _fname
+            with open(_fpath, "w", encoding="utf-8") as _f:
+                json.dump(_data, _f, indent=2, default=str)
+            print(f"[DEBUG] Saved -> {_fpath}")
 
         # ─── PHASE 2: ANALYSIS & FEATURE EXTRACTION ─────────────────────────
         log_stage("5", "FeatureExtractionAgent")
@@ -257,9 +286,25 @@ def run_end_to_end(repo_url: str, output_dir: str):
         with open(brd_out_path, "w", encoding="utf-8") as f:
             f.write(final_markdown)
 
+        # ── DEBUG: Save final payload and validation data to JSON ─────────────
+        _final_payload_debug = {
+            "business_context": biz_ctx,
+            "features": enriched_feat_list,
+            "functional_requirements": fr_dict["functional_requirements"],
+            "non_functional_requirements": nfr_dict["non_functional_requirements"],
+        }
+        for _fname, _data in [
+            (f"{repo_name}_final_payload.json",    _final_payload_debug),
+            (f"{repo_name}_validation_data.json",  final_val),
+        ]:
+            _fpath = out_path / _fname
+            with open(_fpath, "w", encoding="utf-8") as _f:
+                json.dump(_data, _f, indent=2, default=str)
+            print(f"[DEBUG] Saved -> {_fpath}")
+
         print("\n==================================================")
-        print("✅ BRD PIPELINE COMPLETED SUCCESSFULLY")
-        print(f"📄 Output saved to: {brd_out_path}")
+        print("BRD PIPELINE COMPLETED SUCCESSFULLY")
+        print(f"Output saved to: {brd_out_path}")
         print("==================================================\n")
 
     except Exception as e:
@@ -308,6 +353,21 @@ def run_pipeline(repo_url: str, output_path: str = None) -> dict:
         normalized_data,
         validation_data
     )
+
+    # ── DEBUG: Dump intermediate pipeline data to JSON files ──────────────
+    _debug_files = {
+        f"{repo_name}_aggregated_data.json": aggregated_data,
+        f"{repo_name}_normalized_data.json": normalized_data,
+        f"{repo_name}_validation_data.json": validation_data,
+        f"{repo_name}_final_payload.json":   final_payload,
+        f"{repo_name}_ChunkData.json":       chunks_data,
+    }
+    for _fname, _data in _debug_files.items():
+        _fpath = out_path_obj / _fname
+        with open(_fpath, "w", encoding="utf-8") as _f:
+            json.dump(_data, _f, indent=2, default=str)
+        print(f"[DEBUG] Saved → {_fpath}")
+
     return final_payload
 
 
