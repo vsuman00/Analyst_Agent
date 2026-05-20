@@ -100,12 +100,22 @@ def run_full_pipeline_service(repo_url: str, output_dir: str) -> dict:
 
     # Derive a repo-specific clone directory so each repo is isolated
     repo_name = repo_url.rstrip("/").split("/")[-1].replace(".git", "")
-    dest_repo_dir = out_path / f"runner_{repo_name}"
+
+    # ── Per-repo directory layout ──────────────────────────────────────────
+    #   pipeline_out/{repo_name}/brd/      ← BRD .md / .docx
+    #   pipeline_out/{repo_name}/debug/    ← all intermediate JSON dumps
+    #   pipeline_out/{repo_name}/repo/src/ ← cloned source code
+    repo_out_path  = out_path / repo_name
+    brd_path       = repo_out_path / "brd"
+    debug_path     = repo_out_path / "debug"
+    dest_repo_dir  = repo_out_path / "repo" / "src"
+    for _d in (brd_path, debug_path, dest_repo_dir):
+        _d.mkdir(parents=True, exist_ok=True)
 
     print("\n==================================================")
     print(f"🚀 INITIATING DETERMINISTIC BRD PIPELINE")
     print(f"📦 Target: {repo_url}")
-    print(f"📁 Clone Dir: {dest_repo_dir}")
+    print(f"📁 Output Dir: {repo_out_path}")
     print("==================================================")
 
     # ─── PHASE 1: CONTEXT EXTRACTION ─────────────────────────────────────
@@ -116,16 +126,28 @@ def run_full_pipeline_service(repo_url: str, output_dir: str) -> dict:
         raise RuntimeError(f"RepoScanner failed: {scan_data['error']}")
     log_stage("1", "RepoScanner", f"SUCCESS (Found {len(scan_data.get('files', []))} files)")
 
+    # ── DEBUG: Save scan_data (Stage 1 output) to JSON ────────────────────
+    _scan_debug_path = debug_path / "scan_data.json"
+    with open(_scan_debug_path, "w", encoding="utf-8") as _f:
+        json.dump(scan_data, _f, indent=2, default=str)
+    print(f"[DEBUG] scan_data saved → {_scan_debug_path}")
+
     log_stage("2", "FileClassifier")
     classified_data = run_classifier(scan_data)
     log_stage("2", "FileClassifier", "SUCCESS")
+
+    # ── DEBUG: Save classified_data (Stage 2 output) to JSON ───────────────
+    _classified_debug_path = debug_path / "classified_data.json"
+    with open(_classified_debug_path, "w", encoding="utf-8") as _f:
+        json.dump(classified_data, _f, indent=2, default=str)
+    print(f"[DEBUG] classified_data saved → {_classified_debug_path}")
 
     log_stage("3", "ContentProcessor")
     chunks_data = run_content_processor(classified_data, dest_repo_dir)
     log_stage("3", "ContentProcessor", f"SUCCESS (Generated {len(chunks_data.get('chunks', []))} chunks)")
 
     # ── DEBUG: Save raw chunk data for inspection ──────────────────────
-    _chunk_debug_path = out_path / f"{repo_name}_ChunkData.json"
+    _chunk_debug_path = debug_path / "ChunkData.json"
     with open(_chunk_debug_path, "w", encoding="utf-8") as _f:
         json.dump(chunks_data, _f, indent=2, default=str)
     print(f"[DEBUG] Chunk data saved → {_chunk_debug_path}")
@@ -154,13 +176,13 @@ def run_full_pipeline_service(repo_url: str, output_dir: str) -> dict:
     #                  BRDEnrichmentAgent as the main grounding document
     # evidence      → used by BRDComposer & grounding validator
     for _fname, _data in [
-        (f"{repo_name}_repo_context.json", repo_context),
-        (f"{repo_name}_evidence.json",     evidence),
+        ("repo_context.json", repo_context),
+        ("evidence.json",     evidence),
     ]:
-        _fpath = out_path / _fname
+        _fpath = debug_path / _fname
         with open(_fpath, "w", encoding="utf-8") as _f:
             json.dump(_data, _f, indent=2, default=str)
-        print(f"[DEBUG] Saved -> {_fpath}")
+        print(f"[DEBUG] Saved → {_fpath}")
 
     log_stage("4", "ContextAggregator & Normalizer")
     aggregated_data = aggregate_context(chunks_data)
@@ -170,13 +192,13 @@ def run_full_pipeline_service(repo_url: str, output_dir: str) -> dict:
 
     # ── DEBUG: Save aggregated & normalized context to JSON ────────────────
     for _fname, _data in [
-        (f"{repo_name}_aggregated_data.json", aggregated_data),
-        (f"{repo_name}_normalized_data.json", normalized_data),
+        ("aggregated_data.json", aggregated_data),
+        ("normalized_data.json", normalized_data),
     ]:
-        _fpath = out_path / _fname
+        _fpath = debug_path / _fname
         with open(_fpath, "w", encoding="utf-8") as _f:
             json.dump(_data, _f, indent=2, default=str)
-        print(f"[DEBUG] Saved -> {_fpath}")
+        print(f"[DEBUG] Saved → {_fpath}")
 
     # ─── PHASE 2: ANALYSIS & FEATURE EXTRACTION ─────────────────────────
     log_stage("5", "FeatureExtractionAgent")
@@ -311,13 +333,13 @@ def run_full_pipeline_service(repo_url: str, output_dir: str) -> dict:
         "non_functional_requirements": nfr_dict["non_functional_requirements"],
     }
     for _fname, _data in [
-        (f"{repo_name}_final_payload.json",    _final_payload_debug),
-        (f"{repo_name}_validation_data.json",  final_val),
+        ("final_payload.json",    _final_payload_debug),
+        ("validation_data.json",  final_val),
     ]:
-        _fpath = out_path / _fname
+        _fpath = debug_path / _fname
         with open(_fpath, "w", encoding="utf-8") as _f:
             json.dump(_data, _f, indent=2, default=str)
-        print(f"[DEBUG] Saved -> {_fpath}")
+        print(f"[DEBUG] Saved → {_fpath}")
 
     return {
         "final_payload": final_payload,
@@ -327,7 +349,8 @@ def run_full_pipeline_service(repo_url: str, output_dir: str) -> dict:
         "features": enriched_feat_list,
         "functional_requirements": fr_dict["functional_requirements"],
         "non_functional_requirements": nfr_dict["non_functional_requirements"],
-        "repo_name": repo_name
+        "repo_name": repo_name,
+        "brd_path": str(brd_path),
     }
 
 
@@ -337,14 +360,15 @@ def run_end_to_end(repo_url: str, output_dir: str):
         final_markdown = res["final_markdown"]
         repo_name = res["repo_name"]
 
-        # Save final BRD output file
-        brd_out_path = Path(output_dir) / f"BRD_{repo_name}.md"
+        # Save final BRD into the per-repo brd/ folder
+        brd_out_path = Path(res["brd_path"]) / f"BRD_{repo_name}.md"
         with open(brd_out_path, "w", encoding="utf-8") as f:
             f.write(final_markdown)
 
         print("\n==================================================")
-        print("BRD PIPELINE COMPLETED SUCCESSFULLY")
-        print(f"Output saved to: {brd_out_path}")
+        print("✅ BRD PIPELINE COMPLETED SUCCESSFULLY")
+        print(f"📄 BRD saved to : {brd_out_path}")
+        print(f"🗂  Debug JSONs  : {res['brd_path'].replace('/brd', '/debug')}")
         print("==================================================\n")
 
     except Exception as e:
@@ -371,14 +395,31 @@ def run_pipeline(repo_url: str, output_path: str = None) -> dict:
 
     # Derive a unique, repo-specific clone directory so runs never cross-contaminate
     repo_name = repo_url.rstrip("/").split("/")[-1].replace(".git", "")
-    dest_repo_dir = out_path_obj / f"runner_{repo_name}"
+
+    # Per-repo layout: debug/ for JSONs, repo/src/ for cloned code
+    repo_out   = out_path_obj / repo_name
+    debug_path = repo_out / "debug"
+    dest_repo_dir = repo_out / "repo" / "src"
+    for _d in (debug_path, dest_repo_dir):
+        _d.mkdir(parents=True, exist_ok=True)
 
     # Always clone fresh — never reuse a stale directory from a previous run
     scan_data = scan_repository(repo_url, str(dest_repo_dir), skip_clone=False)
     if "error" in scan_data:
         raise RuntimeError(f"RepoScanner failed: {scan_data['error']}")
 
+    # ── DEBUG: Save scan_data (Stage 1 output) to JSON ────────────────────
+    with open(debug_path / "scan_data.json", "w", encoding="utf-8") as _f:
+        json.dump(scan_data, _f, indent=2, default=str)
+    print(f"[DEBUG] scan_data saved → {debug_path / 'scan_data.json'}")
+
     classified_data = run_classifier(scan_data)
+
+    # ── DEBUG: Save classified_data (Stage 2 output) to JSON ───────────────
+    with open(debug_path / "classified_data.json", "w", encoding="utf-8") as _f:
+        json.dump(classified_data, _f, indent=2, default=str)
+    print(f"[DEBUG] classified_data saved → {debug_path / 'classified_data.json'}")
+
     # Pass the actual cloned repo dir so content_processor reads the right files
     chunks_data = run_content_processor(classified_data, dest_repo_dir)
 
@@ -397,14 +438,14 @@ def run_pipeline(repo_url: str, output_path: str = None) -> dict:
 
     # ── DEBUG: Dump intermediate pipeline data to JSON files ──────────────
     _debug_files = {
-        f"{repo_name}_aggregated_data.json": aggregated_data,
-        f"{repo_name}_normalized_data.json": normalized_data,
-        f"{repo_name}_validation_data.json": validation_data,
-        f"{repo_name}_final_payload.json":   final_payload,
-        f"{repo_name}_ChunkData.json":       chunks_data,
+        "aggregated_data.json": aggregated_data,
+        "normalized_data.json": normalized_data,
+        "validation_data.json": validation_data,
+        "final_payload.json":   final_payload,
+        "ChunkData.json":       chunks_data,
     }
     for _fname, _data in _debug_files.items():
-        _fpath = out_path_obj / _fname
+        _fpath = debug_path / _fname
         with open(_fpath, "w", encoding="utf-8") as _f:
             json.dump(_data, _f, indent=2, default=str)
         print(f"[DEBUG] Saved → {_fpath}")
