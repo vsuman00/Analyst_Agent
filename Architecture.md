@@ -1,7 +1,7 @@
 # Architecture — Analyst Agent
 
-> **Last updated:** 2026-05-17  
-> **Version:** 2.0 — Full codebase analysis
+> **Last updated:** 2026-05-20  
+> **Version:** 2.1 — Unified CLI/API orchestration + 9-dimension BRD validator
 
 ---
 
@@ -211,7 +211,7 @@ GitHub Repo URL
 
 **Path A — CLI (`run_end_to_end`)**
 
-All 10 stages run sequentially in `app/pipeline/runner.py`. Colored stage logging. Writes `BRD_<repo_name>.md` to `runtime/pipeline_out/`.
+All 10 stages run sequentially in `app/pipeline/runner.py`. Delegates to `run_full_pipeline_service()` for the shared orchestration core. Colored stage logging. Writes `BRD_<repo_name>.md` to `runtime/pipeline_out/`.
 
 ```bash
 python -m app.pipeline.runner https://github.com/owner/repo --outdir runtime/pipeline_out
@@ -219,11 +219,19 @@ python -m app.pipeline.runner https://github.com/owner/repo --outdir runtime/pip
 
 **Path B — API (`/analyze-and-convert`)**
 
-`run_pipeline()` handles Phase 1 (returns canonical payload). The API endpoint then orchestrates Phases 2–4 inline and returns `{pipeline, brd, markdown, validation}`.
+`run_full_pipeline_service()` handles all 10 stages end-to-end — **not** `run_pipeline()`. The endpoint returns `{pipeline, brd, markdown, validation}`. The separate `/analyze` endpoint uses `run_pipeline()` for Phase 1 only.
 
 ```bash
 POST /analyze-and-convert  {"repo_url": "https://github.com/owner/repo"}
 ```
+
+**Function responsibilities in `runner.py`:**
+
+| Function | Scope | Used By |
+|---|---|---|
+| `run_full_pipeline_service(repo_url, output_dir)` | All 10 stages — returns full result dict | `run_end_to_end()`, `/analyze-and-convert` |
+| `run_end_to_end(repo_url, output_dir)` | CLI wrapper — calls `run_full_pipeline_service()`, writes BRD to disk | CLI `__main__` |
+| `run_pipeline(repo_url, output_path)` | Phase 1 only — clone → scan → classify → chunk → normalize | `/analyze` endpoint |
 
 ---
 
@@ -233,7 +241,7 @@ POST /analyze-and-convert  {"repo_url": "https://github.com/owner/repo"}
                     ┌─────────┐
                     │ CREATED │
                     └────┬────┘
-                         │ run_end_to_end() / run_pipeline() called
+                         │ run_end_to_end() / run_full_pipeline_service() called
                          ▼
                    ┌──────────┐
                    │INGESTING │  RepoScanner cloning + scanning
@@ -828,7 +836,7 @@ Analyst-Agent/
 │   ├── api/
 │   │   └── main.py                         # FastAPI entry point — all 15 routes
 │   ├── pipeline/
-│   │   └── runner.py                       # Master orchestrator (run_pipeline + run_end_to_end)
+│   │   └── runner.py                       # Master orchestrator (run_full_pipeline_service + run_end_to_end + run_pipeline)
 │   │
 │   ├── eca/                                # Stage 1: Extract, Classify, Aggregate
 │   │   ├── repo_scanner.py                 # git clone + os.walk file scan
