@@ -60,66 +60,70 @@ CREATED → INGESTING → ECA_DONE → CONTEXT_READY → NORMALIZED → VALIDATE
 
 ## Directory Structure
 
-```
+```text
 Analyst-Agent/
 ├── app/
 │   ├── api/
-│   │   └── main.py                         # FastAPI entry point — all routes
+│   │   └── main.py                         # FastAPI entry point — all 15 routes
 │   ├── pipeline/
-│   │   └── runner.py                       # Master orchestrator (run_pipeline + run_end_to_end)
+│   │   └── runner.py                       # Master orchestrator (run_full_pipeline_service + run_end_to_end + run_pipeline)
 │   ├── eca/                                # Stage 1: Extract, Classify, Aggregate
-│   │   ├── repo_scanner.py                 # Clone & file-tree scan
-│   │   ├── file_classifier.py              # Extension → role classification
-│   │   ├── content_processor.py            # Chunked file content reader
-│   │   ├── language_loader.py              # Pure-read API over language_registry.json (LRU-cached)
-│   │   ├── extractor.py                    # Sub-extractor orchestrator
-│   │   ├── api_extractor.py                # Detects API routes / endpoint patterns
-│   │   ├── entity_extractor.py             # Identifies domain entities & data models
-│   │   ├── dependency_extractor.py         # Parses dependency manifests
-│   │   ├── defect_extractor.py             # Scans TODO/FIXME/HACK quality markers
-│   │   ├── repo_context_builder.py         # Rich context extraction with README, tech stack, snippets
+│   │   ├── repo_scanner.py                 # git clone + os.walk file scan
+│   │   ├── file_classifier.py              # Path heuristics + language_registry.json role lookup
+│   │   ├── content_processor.py            # Chunked file content reader (~3200 chars/chunk)
+│   │   ├── language_loader.py              # LRU-cached pure reader over language_registry.json
+│   │   ├── extractor.py                    # Standalone ECA orchestrator (builds ECAOutput)
+│   │   ├── api_extractor.py                # Spring MVC annotations + .proto gRPC RPC parser
+│   │   ├── entity_extractor.py             # @Entity JPA, Kotlin data class, proto message parser
+│   │   ├── dependency_extractor.py         # Gradle/Maven/npm/pip build file parser
+│   │   ├── defect_extractor.py             # TODO/FIXME/HACK/hardcoded creds scanner
+│   │   ├── repo_context_builder.py         # Priority waterfall → RepoContext dict
+│   │   ├── evidence_manifest.py            # RepoEvidenceManifest from file system + extractors
 │   │   └── config/
-│   │       └── language_registry.json      # Single source of truth for all language knowledge
+│   │       └── language_registry.json      # ★ Single source of truth for all language knowledge
 │   ├── context/                            # Stage 2: Context Intelligence
-│   │   ├── aggregator.py                   # Combines scan data, classified files, content chunks
-│   │   ├── normalizer.py                   # Normalizes into weighted modules
-│   │   └── validator.py                    # Validates completeness of normalized context
+│   │   ├── aggregator.py                   # Chunks → modules by top-level directory
+│   │   ├── normalizer.py                   # snake_case, dedup, noise removal, UUID5 IDs
+│   │   └── validator.py                    # Completeness scoring, core structure check
 │   ├── analysis/                           # Stages 3–4: Analysis & Composition
-│   │   ├── feature_extraction_agent.py     # Scans codebase against signal registry
-│   │   ├── feature_validator.py            # Merges overlapping features, deduplicates
-│   │   ├── feature_interpretation_agent.py  # Maps raw signals to evidence
-│   │   ├── business_understanding_agent.py # Derives product_type, primary_users, core_value
-│   │   ├── product_understanding_agent.py  # Derives product archetype and core capabilities
-│   │   ├── archetype_loader.py             # Loads product archetype definitions
-│   │   ├── functional_requirement_generator.py # Maps features to testable FRs
-│   │   ├── non_functional_requirement_generator.py # Generates system-level NFRs
-│   │   ├── payload_converter.py            # Converts payload → MinimalBRD struct
-│   │   ├── brd_composer.py                 # Assembles all inputs into enterprise BRD
-│   │   ├── brd_enrichment_agent.py         # LLM enrichment orchestrator (Phase 3.5/3.7)
-│   │   ├── brd_validator.py                # 8-dimension BRD quality scorer
+│   │   ├── feature_extraction_agent.py     # LLM-primary feature extraction + confidence calibration
+│   │   ├── feature_validator.py            # 3-pass: dedup → merge groups → normalise
+│   │   ├── feature_interpretation_agent.py # Maps raw signals to evidence (standalone)
+│   │   ├── business_understanding_agent.py # Keyword voting → product_type, primary_users, core_value
+│   │   ├── product_understanding_agent.py  # LLM archetype detection + keyword voting fallback
+│   │   ├── archetype_loader.py             # LRU-cached reader over archetype_registry.json
+│   │   ├── functional_requirement_generator.py  # Template → LLM → deterministic FR generation
+│   │   ├── non_functional_requirement_generator.py  # Keyword-triggered NFR templates (max 8)
+│   │   ├── payload_converter.py            # Canonical payload → MinimalBRD (deterministic)
+│   │   ├── brd_composer.py                 # 16-section Markdown assembly (evidence-aware)
+│   │   ├── brd_enrichment_agent.py         # 7 LLM calls for deep BRD section enrichment (Phase 3.7)
+│   │   ├── brd_validator.py                # 9-dimension BRD quality scorer (threshold 0.85)
 │   │   ├── brd_fix_loop.py                 # Self-annealing repair loop (max 2 passes)
 │   │   ├── fix_loop.py                     # Low-level fix helpers
-│   │   └── document_generator.py           # Markdown → .docx export
+│   │   ├── document_generator.py           # Markdown → .docx via python-docx
+│   │   └── config/
+│   │       └── archetype_registry.json     # ★ Single source of truth for product archetypes
 │   ├── utils/
-│   │   ├── llm_client.py                   # OpenAI API wrapper (retry, JSON mode, temperature=0)
-│   │   └── llm_enrichment.py               # LLM enrichment + hallucination pruning
+│   │   ├── llm_client.py                   # OpenAI wrapper (retry, JSON mode, temperature=0)
+│   │   └── llm_enrichment.py               # 5 enrichment functions + hallucination pruning
 │   ├── output/
-│   │   └── final_output_builder.py         # Canonical payload builder
+│   │   └── final_output_builder.py         # Merges Phase 1 outputs into canonical payload
 │   ├── schemas/
-│   │   └── models.py                       # Pydantic models and data contracts
+│   │   └── models.py                       # ★ All Pydantic models and data contracts
 │   ├── validation/                         # Validation utilities
-│   └── tests/                              # Deterministic test cases
+│   └── tests/                              # pytest test suite
 ├── architecture/
 │   ├── pipeline_sop.md                     # Pipeline Standard Operating Procedure
 │   ├── technical_overview.md               # Technical architecture overview
-│   └── BRD.md                              # Sample generated BRD
+│   └── BRD.md                              # Sample generated BRD for reference
 ├── runtime/
 │   └── pipeline_out/                       # All generated BRD artifacts (.md, .docx)
+│       └── runner_<repo_name>/             # Isolated clone directory per run
 ├── static/
 │   └── index.html                          # Frontend UI
 ├── .env.example                            # Environment variable template
 ├── requirements.txt
-└── Agents.md                              # This file
+└── Agents.md                               # This file (Multi-agent collaboration guide)
 ```
 
 ---
@@ -351,9 +355,9 @@ The [language_registry.json](app/eca/config/language_registry.json) is the **sin
 
 ---
 
-## BRD Validation (8 Dimensions)
+## BRD Validation (9 Dimensions)
 
-The `BRDValidator` scores every generated BRD across 8 dimensions (threshold: 0.85):
+The `BRDValidator` scores every generated BRD across 9 dimensions (threshold: 0.85):
 
 | # | Dimension | What is Checked |
 |---|-----------|----------------|
@@ -365,6 +369,7 @@ The `BRDValidator` scores every generated BRD across 8 dimensions (threshold: 0.
 | 6 | **NFR Specificity** | NFR SLA targets contain real measurable values |
 | 7 | **Stakeholder Specificity** | Stakeholder roles are project-specific, not generic |
 | 8 | **Section Depth** | Every section has meaningful content (≥30 words) |
+| 9 | **Tech Grounding** | Tech claims (Kubernetes, Docker, GDPR, gRPC, etc.) are backed by `RepoEvidenceManifest` |
 
 **Required BRD Sections (16 total):**
 1. Executive Summary · 2. Business Context · 3. Current State Analysis · 4. Stakeholders
@@ -441,7 +446,7 @@ Key test patterns:
 
 ```python
 # Pipeline runner
-from app.pipeline.runner import run_pipeline, run_end_to_end
+from app.pipeline.runner import run_pipeline, run_end_to_end, run_full_pipeline_service
 
 # ECA components
 from app.eca.repo_scanner import scan_repository
@@ -480,4 +485,4 @@ from app.schemas.models import ECAOutput, FeatureExtractionResult, ValidatedFeat
 
 ---
 
-*Last updated: 2026-05-17*
+*Last updated: 2026-05-20*
