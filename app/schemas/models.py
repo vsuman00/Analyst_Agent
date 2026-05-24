@@ -304,3 +304,43 @@ class RepoEvidence(BaseModel):
     # Build metadata
     build_tool:       str = "unknown"
     primary_language: str = "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Skill Pack System — Dynamic analysis skill selection & execution
+# ---------------------------------------------------------------------------
+
+class SkillActivation(BaseModel):
+    """
+    Record of one skill pack that was activated for a pipeline run.
+
+    Fields:
+      - skill_id       : directory name under packs/ (e.g. "web_api")
+      - skill_name     : human-readable name from YAML frontmatter
+      - score          : 0.0–1.0 detection confidence vs. repo evidence
+      - auto_generated : True if skill was synthesised by SkillComposer
+      - scripts_run    : list of script subcommands executed (e.g. ["contracts", "auth"])
+    """
+    skill_id: str
+    skill_name: str
+    score: float
+    auto_generated: bool = False
+    scripts_run: List[str] = Field(default_factory=list)
+
+
+class SkillExecutionResult(BaseModel):
+    """
+    Aggregated output from all activated skill packs for one pipeline run.
+
+    Merged into the feature extraction stage as supplementary signals.
+
+    Fields:
+      - activated_skills    : which skill packs fired and at what confidence
+      - additional_features : pre-extracted features from skill scripts (merged into Stage 5)
+      - additional_signals  : domain-specific signals (e.g. {"auth_type": "jwt"})
+      - brd_section_hints   : per-section guidance strings merged from all activated skills
+    """
+    activated_skills: List[SkillActivation] = Field(default_factory=list)
+    additional_features: List[Dict[str, Any]] = Field(default_factory=list)
+    additional_signals: Dict[str, Any] = Field(default_factory=dict)
+    brd_section_hints: Dict[str, str] = Field(default_factory=dict)

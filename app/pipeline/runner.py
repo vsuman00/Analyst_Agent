@@ -3,6 +3,26 @@ run_full_pipeline.py — Master Orchestration Script
 ----------------------------------------------------
 Executes the full deterministic 4-phase pipeline on a target repository
 and outputs the finalized, validated Business Requirement Document (BRD).
+
+Pipeline stages:
+  1    RepoScanner
+  2    FileClassifier
+  3    ContentProcessor
+  3.5  RepoContextBuilder
+  3.6  RepoEvidenceManifest
+  4    ContextAggregator & Normalizer
+  4.5  SkillPackMatcher          ← NEW: dynamic skill pack detection
+  4.7  SkillPackExecutor         ← NEW: run activated skill scripts
+  5    FeatureExtractionAgent
+  6    FeatureValidator
+  6.5  Semantic Feature Pruning
+  7    ProductUnderstandingAgent
+  8    FunctionalRequirementGenerator
+  9    NonFunctionalRequirementGenerator
+  3.5L LLM Enrichment
+  3.6L BusinessUnderstandingAgent
+  3.7  BRD Deep Enrichment
+  10   BRDComposer & FixLoop
 """
 
 import sys
@@ -81,11 +101,11 @@ def _try_enrich(val_feats_list, prod_dict, tech_stack):
 def log_stage(stage_num: str, name: str, status: str = "STARTED"):
     """Helper function to cleanly log pipeline stages."""
     if status == "STARTED":
-        print(f"\n[{stage_num}/10] \033[94m{name} -> {status}...\033[0m")
+        print(f"\n[{stage_num}] \033[94m{name} -> {status}...\033[0m")
     elif "SUCCESS" in status or "PASSED" in status:
-        print(f"[{stage_num}/10] \033[92m{name} -> {status}\033[0m")
+        print(f"[{stage_num}] \033[92m{name} -> {status}\033[0m")
     else:
-        print(f"[{stage_num}/10] \033[91m{name} -> {status}\033[0m")
+        print(f"[{stage_num}] \033[91m{name} -> {status}\033[0m")
 
 def run_full_pipeline_service(repo_url: str, output_dir: str) -> dict:
     """
@@ -200,11 +220,51 @@ def run_full_pipeline_service(repo_url: str, output_dir: str) -> dict:
             json.dump(_data, _f, indent=2, default=str)
         print(f"[DEBUG] Saved → {_fpath}")
 
+    # ─── STAGE 4.5: DYNAMIC SKILL PACK DETECTION ────────────────────────
+    # Score all available skill packs (SKILL.md files) against repo evidence.
+    # If no pack matches → SkillComposer auto-generates one via LLM.
+    # This stage NEVER blocks the pipeline — failures fall through gracefully.
+    skill_results = None
+    try:
+        from app.skills.skill_matcher import detect_skill_packs as _detect_skills
+        from app.skills.skill_executor import execute_skill_packs as _exec_skills
+        from app.schemas.models import SkillExecutionResult
+
+        log_stage("4.5", "SkillPackMatcher")
+        activated_packs = _detect_skills(evidence, repo_context, dep_data)
+        if activated_packs:
+            pack_summary = ", ".join(f"{s.name}({sc:.2f})" for s, sc in activated_packs)
+            log_stage("4.5", "SkillPackMatcher", f"SUCCESS ({len(activated_packs)} packs: {pack_summary})")
+
+            # ─── STAGE 4.7: SKILL PACK EXECUTION ────────────────────────
+            log_stage("4.7", "SkillPackExecutor")
+            skill_results = _exec_skills(activated_packs, str(dest_repo_dir))
+            n_feats = len(skill_results.additional_features)
+            n_sigs = len(skill_results.additional_signals)
+            log_stage("4.7", "SkillPackExecutor",
+                      f"SUCCESS ({n_feats} features, {n_sigs} signals)")
+
+            # ── DEBUG: Save skill pack results ─────────────────────────
+            _skill_debug = debug_path / "skill_results.json"
+            with open(_skill_debug, "w", encoding="utf-8") as _f:
+                json.dump(skill_results.model_dump(), _f, indent=2, default=str)
+            print(f"[DEBUG] skill_results saved → {_skill_debug}")
+        else:
+            log_stage("4.5", "SkillPackMatcher", "SUCCESS (No packs matched — using standard pipeline)")
+    except Exception as e:
+        print(f"[SKILL PACKS] Stage 4.5/4.7 failed (non-blocking): {e}")
+        log_stage("4.5", "SkillPackMatcher", f"SKIPPED ({e})")
+
     # ─── PHASE 2: ANALYSIS & FEATURE EXTRACTION ─────────────────────────
     log_stage("5", "FeatureExtractionAgent")
     chunks_list = chunks_data.get("chunks", [])
     # Pass repo_context as primary LLM input (README, structure, snippets)
-    feat_ext_result = extract_features(norm_modules, chunks_list, repo_context=repo_context)
+    # Pass skill_results as supplementary context from activated skill packs
+    feat_ext_result = extract_features(
+        norm_modules, chunks_list,
+        repo_context=repo_context,
+        skill_results=skill_results,
+    )
     raw_feats = feat_ext_result.model_dump()
     log_stage("5", "FeatureExtractionAgent", f"SUCCESS ({len(raw_feats['features'])} raw features)")
 

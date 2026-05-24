@@ -199,13 +199,13 @@ Return ONLY a valid JSON object matching this schema:
 
 
 # ---------------------------------------------------------------------------
-# Public API
 # ---------------------------------------------------------------------------
 
 def extract_features(
     normalized_modules: List[Dict],
     chunks: List[Dict],
     repo_context: Dict = None,
+    skill_results = None,
 ) -> FeatureExtractionResult:
     """
     Dynamically extract features using an LLM based on repository contents.
@@ -214,15 +214,22 @@ def extract_features(
     primary LLM input — README, structure, tech stack, and key snippets.
     Falls back to normalized_modules + chunk snippets if repo_context is absent.
 
+    If skill_results is provided (SkillExecutionResult from activated skill packs),
+    skill-extracted features are merged into the final result and skill signals
+    are injected into the LLM context for richer extraction.
+
     Post-processes with confidence calibration (cross-file boost + negative signals).
     """
     if llm_json_call is None or not os.environ.get("OPENAI_API_KEY"):
         print("[LLM] Feature extraction falling back to generic baseline (No API Key).", file=sys.stderr)
         result = _fallback_extraction(normalized_modules)
         result = FeatureExtractionResult(features=_calibrate_confidence(result.features, chunks))
+        # Merge skill-extracted features even in fallback mode
+        if skill_results:
+            result = _merge_skill_features(result, skill_results)
         return result
 
-    # ── Build LLM context string ───────────────────────────────────────────
+    # ── Build LLM context string ─────────────────────────────────────────
     if repo_context:
         context_str = _build_rich_context_str(repo_context)
     else:
@@ -237,6 +244,21 @@ def extract_features(
             f"DETECTED MODULES: {', '.join(module_names)}\n\n"
             f"FILE SNIPPETS:\n" + "\n".join(chunk_summaries)
         )
+
+    # ── Inject skill pack signals into LLM context ─────────────────────
+    if skill_results and hasattr(skill_results, 'additional_signals'):
+        skill_signals = skill_results.additional_signals
+        if skill_signals:
+            signals_text = "\n".join(f"  - {k}: {v}" for k, v in skill_signals.items()
+                                     if not isinstance(v, (dict, list)) or len(str(v)) < 200)
+            context_str += (
+                f"\n\nSKILL PACK ANALYSIS SIGNALS (pre-extracted by domain-specific analysers):\n"
+                f"{signals_text}"
+            )
+        # Also inject BRD section hints as extraction guidance
+        if hasattr(skill_results, 'brd_section_hints') and skill_results.brd_section_hints:
+            hints_text = "\n".join(f"  - {k}: {v}" for k, v in skill_results.brd_section_hints.items())
+            context_str += f"\n\nDOMAIN-SPECIFIC EXTRACTION GUIDANCE:\n{hints_text}"
 
     try:
         result = llm_json_call(DYNAMIC_EXTRACTION_PROMPT, context_str, max_tokens=2000)
@@ -255,16 +277,75 @@ def extract_features(
         if not extracted:
             print("[LLM] Dynamic feature extraction returned empty list. Using fallback.", file=sys.stderr)
             fallback = _fallback_extraction(normalized_modules)
-            return FeatureExtractionResult(features=_calibrate_confidence(fallback.features, chunks))
+            result_obj = FeatureExtractionResult(features=_calibrate_confidence(fallback.features, chunks))
+            if skill_results:
+                result_obj = _merge_skill_features(result_obj, skill_results)
+            return result_obj
 
         # Apply confidence calibration post-processing
         calibrated = _calibrate_confidence(extracted, chunks)
-        return FeatureExtractionResult(features=calibrated)
+        result_obj = FeatureExtractionResult(features=calibrated)
+
+        # Merge skill-extracted features
+        if skill_results:
+            result_obj = _merge_skill_features(result_obj, skill_results)
+
+        return result_obj
 
     except Exception as e:
         print(f"[LLM] Dynamic feature extraction failed: {e}. Using fallback.", file=sys.stderr)
         fallback = _fallback_extraction(normalized_modules)
-        return FeatureExtractionResult(features=_calibrate_confidence(fallback.features, chunks))
+        result_obj = FeatureExtractionResult(features=_calibrate_confidence(fallback.features, chunks))
+        if skill_results:
+            result_obj = _merge_skill_features(result_obj, skill_results)
+        return result_obj
+
+
+def _merge_skill_features(
+    result: FeatureExtractionResult,
+    skill_results,
+) -> FeatureExtractionResult:
+    """
+    Merge skill-pack-extracted features into the main feature list.
+    De-duplicates by normalised feature name (lowercase, underscored).
+    Skill features start with the next available feat-NNN id.
+    """
+    if not skill_results or not hasattr(skill_results, 'additional_features'):
+        return result
+
+    skill_feats = skill_results.additional_features
+    if not skill_feats:
+        return result
+
+    # Build set of existing normalised names for dedup
+    existing_names = set()
+    for f in result.features:
+        existing_names.add(f.name.lower().replace(" ", "_"))
+
+    next_id = len(result.features) + 1
+    merged = list(result.features)
+
+    for sf in skill_feats:
+        name = sf.get("name", "")
+        normalised = name.lower().replace(" ", "_")
+        if normalised in existing_names or not name:
+            continue  # skip duplicates
+
+        existing_names.add(normalised)
+        merged.append(ExtractedFeature(
+            id=f"feat-{next_id:03d}",
+            name=name,
+            description=sf.get("description", f"Feature extracted by skill pack: {name}"),
+            source_modules=sf.get("source_modules", []),
+            confidence=float(sf.get("confidence", 0.75)),
+        ))
+        next_id += 1
+
+    if len(merged) > len(result.features):
+        added = len(merged) - len(result.features)
+        print(f"[SKILL MERGE] Added {added} skill-extracted features (total: {len(merged)}).", file=sys.stderr)
+
+    return FeatureExtractionResult(features=merged)
 
 
 def _build_rich_context_str(repo_context: Dict) -> str:

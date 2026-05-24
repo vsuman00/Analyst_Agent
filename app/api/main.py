@@ -418,3 +418,147 @@ async def download_pipeline_json(payload: Dict[str, Any]):
         headers={"Content-Disposition": 'attachment; filename="pipeline_output.json"'},
     )
 
+
+# ─── Skill Pack Management Endpoints ──────────────────────────────────────────
+
+@app.get("/skills")
+async def list_skill_packs():
+    """
+    List all available skill packs (both curated and auto-generated).
+    Returns: id, name, description, auto_generated flag, and script count.
+    """
+    try:
+        from app.skills.skill_loader import load_all_skills
+        skills = load_all_skills()
+        return {
+            "skill_packs": [
+                {
+                    "id": s.id,
+                    "name": s.name,
+                    "version": s.version,
+                    "description": s.description[:300],
+                    "auto_generated": s.auto_generated,
+                    "has_scripts": s.has_scripts,
+                    "script_count": len(s.script_names),
+                    "detection_signals": s.detection_signals,
+                    "nfr_emphasis": s.nfr_emphasis,
+                }
+                for s in skills
+            ],
+            "total": len(skills),
+            "curated": sum(1 for s in skills if not s.auto_generated),
+            "generated": sum(1 for s in skills if s.auto_generated),
+        }
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to load skill packs: {str(e)}")
+
+
+@app.get("/skills/{skill_id}")
+async def get_skill_pack(skill_id: str):
+    """
+    Get full details of a specific skill pack, including its SKILL.md content.
+    """
+    try:
+        from app.skills.skill_loader import load_all_skills
+        skills = load_all_skills()
+        for s in skills:
+            if s.id == skill_id:
+                return {
+                    "id": s.id,
+                    "name": s.name,
+                    "version": s.version,
+                    "description": s.description,
+                    "auto_generated": s.auto_generated,
+                    "has_scripts": s.has_scripts,
+                    "script_names": s.script_names,
+                    "detection_signals": s.detection_signals,
+                    "nfr_emphasis": s.nfr_emphasis,
+                    "brd_section_notes": s.brd_section_notes,
+                    "memory_tags": s.memory_tags,
+                    "instructions_body": s.instructions_body,
+                }
+        raise HTTPException(status_code=404, detail=f"Skill pack '{skill_id}' not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class SkillComposeRequest(BaseModel):
+    """Request body for manually triggering skill composition."""
+    evidence: Dict[str, Any]
+    repo_context: Dict[str, Any]
+    detected_deps: List[Dict[str, Any]] = []
+
+
+@app.post("/skills/compose")
+async def compose_skill_pack(request: SkillComposeRequest):
+    """
+    Manually trigger skill pack composition via LLM.
+    Provide evidence and repo_context from a previous pipeline run.
+    The generated skill pack is saved to packs/_generated/ for future reuse.
+    """
+    try:
+        from app.skills.skill_composer import compose_missing_skill
+        result = compose_missing_skill(
+            request.evidence,
+            request.repo_context,
+            request.detected_deps,
+        )
+        if result:
+            return {
+                "status": "success",
+                "skill_id": result.id,
+                "name": result.name,
+                "description": result.description,
+                "has_scripts": result.has_scripts,
+                "auto_generated": True,
+            }
+        else:
+            return {
+                "status": "failed",
+                "message": "Skill composition failed — check OPENAI_API_KEY or LLM availability",
+            }
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Skill composition failed: {str(e)}")
+
+
+@app.put("/skills/{skill_id}/promote")
+async def promote_skill_pack(skill_id: str):
+    """
+    Promote an auto-generated skill pack from _generated/ to the stable packs/ directory.
+    This makes it a first-class curated skill pack.
+    """
+    import shutil
+    try:
+        from app.skills.skill_loader import PACKS_DIR, GENERATED_DIR
+        source = None
+        if GENERATED_DIR.is_dir():
+            for child in GENERATED_DIR.iterdir():
+                if child.is_dir() and child.name == skill_id:
+                    source = child
+                    break
+        if not source:
+            raise HTTPException(status_code=404, detail=f"Generated skill '{skill_id}' not found")
+
+        dest = PACKS_DIR / skill_id
+        if dest.exists():
+            raise HTTPException(status_code=409, detail=f"Stable skill '{skill_id}' already exists")
+
+        shutil.copytree(source, dest)
+        shutil.rmtree(source)
+        return {
+            "status": "promoted",
+            "skill_id": skill_id,
+            "from": str(source),
+            "to": str(dest),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
