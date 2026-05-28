@@ -165,8 +165,12 @@ def compose_missing_skill(
                 return existing
 
     # Build the LLM prompt with repo context
+    deps_list = detected_deps
+    if isinstance(detected_deps, dict):
+        deps_list = detected_deps.get("dependencies", [])
+
     dep_names = []
-    for d in detected_deps[:20]:
+    for d in deps_list[:20]:
         if isinstance(d, dict):
             dep_names.append(d.get("name", ""))
         elif isinstance(d, str):

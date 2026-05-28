@@ -46,6 +46,7 @@ from app.eca.repo_context_builder import build_repo_context
 from app.eca.api_extractor import extract_api_endpoints
 from app.eca.dependency_extractor import extract_dependencies
 from app.eca.evidence_manifest import build_evidence_manifest
+from app.eca.entity_extractor import extract_entities
 from app.context.aggregator import aggregate_context
 from app.context.normalizer import normalize_context
 
@@ -62,7 +63,7 @@ from app.analysis.brd_composer import compose_brd
 from app.analysis.brd_fix_loop import run_fix_loop
 
 # Phase 3.5: LLM Enrichment (optional — skipped gracefully if OPENAI_API_KEY not set)
-def _try_enrich(val_feats_list, prod_dict, tech_stack):
+def _try_enrich(val_feats_list, prod_dict, tech_stack, evidence):
     """
     Attempt LLM enrichment. Returns enriched features, updated business context, and artifacts.
     Silently skips if OPENAI_API_KEY is not configured.
@@ -90,12 +91,83 @@ def _try_enrich(val_feats_list, prod_dict, tech_stack):
         artifacts = enrich_enterprise_artifacts(
             business_context={"product_type": prod_dict["product"]["name"]},
             features=enriched_feats,
-            tech_stack=tech_stack
+            tech_stack=tech_stack,
+            evidence=evidence
         )
         return enriched_feats, prod_dict, artifacts
     except Exception as e:
         print(f"[LLM] Enrichment failed, continuing with deterministic output. Error: {e}")
         return val_feats_list, prod_dict, {}
+
+
+def _build_tech_labels(dep_data: dict, evidence: dict) -> list:
+    """Return a flat list of human-readable tech label strings.
+
+    This is the single source of truth for the tech_stack value that flows
+    into business_context and then into every BRD section composer.
+
+    Generic by design \u2014 it reads what dependency_extractor and
+    evidence_manifest already found.  No language-specific patterns here.
+
+    Parameters
+    ----------
+    dep_data : output of extract_dependencies()
+    evidence : output of build_evidence_manifest()
+
+    Returns
+    -------
+    List[str] e.g. ["Kotlin", "Gradle", "Android", "Docker"]
+    """
+    labels: list = []
+    seen: set = set()
+
+    def _add(label: str) -> None:
+        clean = label.strip()
+        if clean and clean.lower() not in seen:
+            seen.add(clean.lower())
+            labels.append(clean)
+
+    # 1. Primary language \u2014 most important, always first
+    lang = dep_data.get("language", "")
+    if lang and lang != "unknown":
+        _add(lang.title())
+
+    # 2. Build tool
+    build_tool = dep_data.get("build_tool", "")
+    if build_tool and build_tool != "unknown":
+        _add(build_tool.title())
+
+    # 3. Deployment platform (android, ios, web, server, desktop)
+    platform = evidence.get("platform", "")
+    if platform and platform not in ("unknown", "library"):
+        _add(platform.title())
+
+    # 4. Infrastructure signals
+    if evidence.get("has_docker"):
+        _add("Docker")
+    if evidence.get("has_kubernetes"):
+        _add("Kubernetes")
+
+    # 5. Top framework / library deps (generic \u2014 use names from build files)
+    skip_cats  = {"testing", "build"}
+    skip_names = {"jvm-target", "application", "android", "serialization"}
+    dep_count = 0
+    for dep in dep_data.get("dependencies", []):
+        if dep_count >= 8:
+            break
+        cat  = dep.get("category", "")
+        name = dep.get("name", "").strip()
+        if cat in skip_cats:
+            continue
+        # Strip Maven/Gradle group prefix for display
+        display = name.split(":")[-1].strip() if ":" in name else name
+        display = display.strip().strip("\"' ")
+        if not display or display.lower() in skip_names:
+            continue
+        _add(display)
+        dep_count += 1
+
+    return labels
 
 
 def log_stage(stage_num: str, name: str, status: str = "STARTED"):
@@ -172,24 +244,34 @@ def run_full_pipeline_service(repo_url: str, output_dir: str) -> dict:
         json.dump(chunks_data, _f, indent=2, default=str)
     print(f"[DEBUG] Chunk data saved → {_chunk_debug_path}")
 
-    # ─── PHASE 1.5: BUILD RICH REPO CONTEXT ──────────────────────────────
-    # This replaces lossy aggregator→normalizer→module-names as the LLM input.
-    # Produces README, tech_stack, file structure, and key snippets in one object.
-    log_stage("3.5", "RepoContextBuilder")
-    repo_context = build_repo_context(str(dest_repo_dir), chunks_data)
-    log_stage("3.5", "RepoContextBuilder",
-              f"SUCCESS (README: {repo_context['intent_signals'].get('source', 'none')}, "
-              f"no_readme={repo_context['no_readme']})")
-
-    log_stage("3.6", "RepoEvidenceManifest")
+    # ─── PHASE 1.5: EXTRACT DEPS & API BEFORE BUILDING REPO CONTEXT ──────
+    # These must run FIRST so build_repo_context() receives accurate dep_data
+    # and evidence — enabling evidence-driven tech_stack for all project types.
+    log_stage("3.6", "DependencyExtractor + APIExtractor + EntityExtractor")
     api_data  = extract_api_endpoints(dest_repo_dir)
     dep_data  = extract_dependencies(dest_repo_dir)
+    entity_data = extract_entities(dest_repo_dir)
     evidence  = build_evidence_manifest(dest_repo_dir, api_data, dep_data)
     log_stage("3.6", "RepoEvidenceManifest",
               f"SUCCESS (platform={evidence['platform']}, "
+              f"lang={evidence['primary_language']}, "
+              f"build={evidence['build_tool']}, "
               f"http_api={evidence['has_http_api']}, "
               f"android={evidence['has_android']}, "
               f"docker={evidence['has_docker']}, k8s={evidence['has_kubernetes']})")
+
+    # ─── PHASE 1.5: BUILD RICH REPO CONTEXT ──────────────────────────────
+    # Now pass dep_data + evidence so tech_stack is accurate from the start.
+    log_stage("3.5", "RepoContextBuilder")
+    repo_context = build_repo_context(
+        str(dest_repo_dir), chunks_data,
+        dep_data=dep_data,
+        evidence=evidence,
+    )
+    repo_context["data_entities"] = entity_data.get("entities", [])
+    log_stage("3.5", "RepoContextBuilder",
+              f"SUCCESS (README: {repo_context['intent_signals'].get('source', 'none')}, "
+              f"no_readme={repo_context['no_readme']})")
 
     # ── DEBUG: Save the two primary LLM inputs produced after ECA ──────────
     # repo_context  → used by FeatureExtractionAgent, ProductUnderstandingAgent,
@@ -203,6 +285,7 @@ def run_full_pipeline_service(repo_url: str, output_dir: str) -> dict:
         with open(_fpath, "w", encoding="utf-8") as _f:
             json.dump(_data, _f, indent=2, default=str)
         print(f"[DEBUG] Saved → {_fpath}")
+
 
     log_stage("4", "ContextAggregator & Normalizer")
     aggregated_data = aggregate_context(chunks_data)
@@ -302,17 +385,17 @@ def run_full_pipeline_service(repo_url: str, output_dir: str) -> dict:
 
     log_stage("9", "NonFunctionalRequirementGenerator")
     system_type = prod_dict['product']['name']
-    # Use the rich tech_stack from RepoContextBuilder (dict with language/framework/platform).
-    # scan_data does NOT populate a tech_stack field — using it always yielded an empty list,
-    # causing the NFR generator to default to generic cloud-native requirements for every repo.
-    tech_stack_nfr = repo_context.get("tech_stack", {})
+    # Build a flat list of tech label strings from dep_data + evidence.
+    # This is project-type agnostic: it reads what the extractors actually found
+    # (language, build_tool, platform, deps) — never invents or defaults to a generic stack.
+    tech_stack_nfr = _build_tech_labels(dep_data, evidence)
     nfr_result = generate_nfrs(system_type=system_type, tech_stack=tech_stack_nfr)
     nfr_dict = nfr_result.model_dump()
     log_stage("9", "NonFunctionalRequirementGenerator", f"SUCCESS ({len(nfr_dict['non_functional_requirements'])} NFRs)")
 
     # ─── PHASE 3.5: LLM ENRICHMENT ───────────────────────────────────
     enriched_feat_list, prod_dict, artifacts = _try_enrich(
-        val_feats_list, prod_dict, tech_stack_nfr
+        val_feats_list, prod_dict, tech_stack_nfr, evidence
     )
     val_feats["validated_features"] = enriched_feat_list
 
@@ -328,7 +411,7 @@ def run_full_pipeline_service(repo_url: str, output_dir: str) -> dict:
     biz_ctx["product_summary"] = prod_dict["product"].get("summary", "")
     biz_ctx["core_capabilities"] = prod_dict["product"].get("core_capabilities", [])
     biz_ctx["repo_name"] = scan_data.get("repo_name", "Unknown Repository")
-    biz_ctx["tech_stack"] = tech_stack_nfr
+    biz_ctx["tech_stack"] = tech_stack_nfr   # flat List[str] — consumed by all section composers
     biz_ctx["enterprise_artifacts"] = artifacts
 
     # ─── PHASE 3.7: BRD DEEP ENRICHMENT ─────────────────────────────────

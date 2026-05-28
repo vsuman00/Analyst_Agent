@@ -99,8 +99,12 @@ def score_skill(
     # ── Dimension 2: dependency_keywords (any match = strong signal) ──────
     dep_kws = signals.get("dependency_keywords", [])
     if dep_kws:
+        deps_list = detected_deps
+        if isinstance(detected_deps, dict):
+            deps_list = detected_deps.get("dependencies", [])
+        
         dep_names_lower = set()
-        for d in detected_deps:
+        for d in deps_list:
             name = ""
             if isinstance(d, dict):
                 name = d.get("name", "")

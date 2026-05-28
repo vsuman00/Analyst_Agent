@@ -54,8 +54,15 @@ _FLUTTER_SCREEN_RE = re.compile(
 )
 
 # React Native: export default function/class XxxScreen
+# NOTE: scoped to JS/TS files only — must NOT fire on .kt/.swift/.dart files
 _RN_SCREEN_RE = re.compile(
-    r"(?:export\s+default\s+)?(?:function|class|const)\s+(\w*(?:Screen|Page|View)\w*)",
+    r"(?:export\s+default\s+)?(?:function|class|const)\s+(\w*(?:Screen|Page)\w*)",
+    re.IGNORECASE,
+)
+
+# Kotlin Jetpack Compose: @Composable fun XxxScreen()
+_COMPOSE_SCREEN_RE = re.compile(
+    r"@Composable\s+(?:fun|private\s+fun)\s+(\w*(?:Screen|Page|Content|View)\w*)\s*\(",
     re.IGNORECASE,
 )
 
@@ -92,9 +99,15 @@ _MOBILE_EXTS = {
     ".xml", ".plist", ".yaml", ".yml",
 }
 
+# Extensions where React Native patterns are valid (JS/TS ecosystem only)
+_RN_EXTS = {".js", ".jsx", ".ts", ".tsx"}
 
-def _walk_mobile_files(repo_dir: str) -> List[tuple[str, str]]:
-    """Walk repo and yield (relative_path, content) for mobile-relevant files."""
+# Extensions where Kotlin Compose patterns are valid
+_KOTLIN_EXTS = {".kt", ".kts"}
+
+
+def _walk_mobile_files(repo_dir: str) -> List[tuple[str, str, str]]:
+    """Walk repo and yield (relative_path, content, ext) for mobile-relevant files."""
     results = []
     root = Path(repo_dir)
     for dirpath, dirnames, filenames in os.walk(root):
@@ -109,7 +122,7 @@ def _walk_mobile_files(repo_dir: str) -> List[tuple[str, str]]:
                 continue
             try:
                 content = fpath.read_text(encoding="utf-8", errors="replace")
-                results.append((str(rel_dir / fname), content))
+                results.append((str(rel_dir / fname), content, ext))
             except (OSError, UnicodeDecodeError):
                 continue
     return results
@@ -124,16 +137,16 @@ def cmd_screens(repo_dir: str) -> Dict[str, Any]:
     screens: List[Dict[str, Any]] = []
     seen = set()
 
-    patterns = [
+    # Patterns that apply to ALL mobile file extensions
+    universal_patterns = [
         ("android_activity", _ANDROID_ACTIVITY_RE),
         ("ios_viewcontroller", _IOS_VC_RE),
         ("swiftui_view", _SWIFTUI_VIEW_RE),
         ("flutter_screen", _FLUTTER_SCREEN_RE),
-        ("react_native_screen", _RN_SCREEN_RE),
     ]
 
-    for rel_path, content in _walk_mobile_files(repo_dir):
-        for screen_type, pattern in patterns:
+    for rel_path, content, ext in _walk_mobile_files(repo_dir):
+        for screen_type, pattern in universal_patterns:
             for match in pattern.finditer(content):
                 name = match.group(1)
                 key = (name, screen_type)
@@ -145,6 +158,32 @@ def cmd_screens(repo_dir: str) -> Dict[str, Any]:
                         "source_file": rel_path,
                     })
 
+        # React Native: ONLY apply to JS/TS/JSX/TSX files
+        if ext in _RN_EXTS:
+            for match in _RN_SCREEN_RE.finditer(content):
+                name = match.group(1)
+                key = (name, "react_native_screen")
+                if key not in seen:
+                    seen.add(key)
+                    screens.append({
+                        "name": name,
+                        "type": "react_native_screen",
+                        "source_file": rel_path,
+                    })
+
+        # Kotlin Jetpack Compose: ONLY apply to .kt files
+        if ext in _KOTLIN_EXTS:
+            for match in _COMPOSE_SCREEN_RE.finditer(content):
+                name = match.group(1)
+                key = (name, "compose_screen")
+                if key not in seen:
+                    seen.add(key)
+                    screens.append({
+                        "name": name,
+                        "type": "compose_screen",
+                        "source_file": rel_path,
+                    })
+
     # Generate features
     features = []
     if screens:
@@ -153,11 +192,21 @@ def cmd_screens(repo_dir: str) -> Dict[str, Any]:
         for s in screens:
             by_type[s["type"]] = by_type.get(s["type"], 0) + 1
 
+        # Friendly platform labels for feature names
+        _PLATFORM_LABELS: Dict[str, str] = {
+            "android": "Android",
+            "ios": "iOS",
+            "swiftui": "SwiftUI",
+            "flutter": "Flutter",
+            "react": "React Native",
+            "compose": "Jetpack Compose",
+        }
         for stype, count in by_type.items():
-            platform = stype.split("_")[0].title()
+            prefix = stype.split("_")[0].lower()
+            platform_label = _PLATFORM_LABELS.get(prefix, prefix.title())
             features.append({
-                "name": f"{platform.lower()}_screen_navigation",
-                "description": f"{platform} app with {count} screen(s)/page(s): {', '.join(s['name'] for s in screens if s['type'] == stype)[:200]}",
+                "name": f"{prefix}_screen_navigation",
+                "description": f"{platform_label} app with {count} screen(s)/page(s): {', '.join(s['name'] for s in screens if s['type'] == stype)[:200]}",
                 "confidence": min(0.9, 0.7 + 0.05 * count),
                 "source_modules": list(set(s["source_file"] for s in screens if s["type"] == stype))[:5],
             })
@@ -178,7 +227,7 @@ def cmd_permissions(repo_dir: str) -> Dict[str, Any]:
     android_perms = set()
     ios_perms = set()
 
-    for rel_path, content in _walk_mobile_files(repo_dir):
+    for rel_path, content, _ext in _walk_mobile_files(repo_dir):
         for m in _ANDROID_PERM_RE.finditer(content):
             android_perms.add(m.group(1))
         for m in _IOS_PERM_RE.finditer(content):

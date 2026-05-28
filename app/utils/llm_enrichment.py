@@ -257,9 +257,15 @@ def _fallback_core_value(features: List[Dict]) -> str:
 # ---------------------------------------------------------------------------
 
 ENTERPRISE_ARTIFACTS_PROMPT = """\
-You are an enterprise technical architect. Given a software system's context, \
+You are an enterprise technical architect. Given a software system's context and a codebase Evidence Checklist, \
 generate specific, tailored enterprise artifacts. Do NOT use generic placeholders. \
 Tailor the infrastructure, data, compliance, and CI/CD standards to the actual tech stack and features provided.
+
+STRICT RULES:
+1. Do NOT assume or generate Kubernetes or Docker-related infrastructure or CI/CD pipelines unless they are marked as 'SUPPORTED' in the provided Evidence Checklist.
+2. Do NOT mention specific compliance standards like GDPR, CCPA, or HIPAA unless marked as 'SUPPORTED' in the provided Evidence Checklist.
+3. Do NOT mention specific platform clients like iOS, Android, or Google Play/App Store unless marked as 'SUPPORTED' in the provided Evidence Checklist.
+4. If a technology or standard is NOT supported in the Evidence Checklist, provide a generic, lightweight, and grounded alternative appropriate for the tech stack (e.g., standard Python logging instead of ELK cluster, local process execution or systemd instead of Docker/Kubernetes, basic data security/credential hashing instead of GDPR compliance, standard REST API standards instead of gRPC, etc.).
 
 Return ONLY valid JSON matching this schema:
 {
@@ -272,17 +278,37 @@ Return ONLY valid JSON matching this schema:
 }
 """
 
-def enrich_enterprise_artifacts(business_context: Dict, features: List[Dict], tech_stack: List[str]) -> Dict[str, Any]:
+def enrich_enterprise_artifacts(
+    business_context: Dict,
+    features: List[Dict],
+    tech_stack: List[str],
+    evidence: Dict[str, Any] = None,
+) -> Dict[str, Any]:
     """
     Use LLM to generate domain-specific content for the enterprise BRD sections (Data, CI/CD, Infra, etc.).
     Returns an empty dict if it fails, which the composer will handle via fallbacks.
     """
     feature_names = [f.get("name", "").replace("_", " ") for f in features[:10]]
+    evidence = evidence or {}
+
+    evidence_checklist = [
+        f"- Docker containerization: {'SUPPORTED (Dockerfile/compose found)' if evidence.get('has_docker') else 'NOT SUPPORTED (No Docker files)'}",
+        f"- Kubernetes orchestration: {'SUPPORTED (k8s/helm manifests found)' if evidence.get('has_kubernetes') else 'NOT SUPPORTED (No k8s files)'}",
+        f"- HTTP REST API: {'SUPPORTED (HTTP endpoints found)' if evidence.get('has_http_api') else 'NOT SUPPORTED'}",
+        f"- gRPC services: {'SUPPORTED (proto files/rpcs found)' if evidence.get('has_grpc') else 'NOT SUPPORTED'}",
+        f"- Database: {'SUPPORTED (database dependencies found)' if evidence.get('has_database') else 'NOT SUPPORTED'}",
+        f"- Authentication: {'SUPPORTED (auth dependencies/dirs found)' if evidence.get('has_auth') else 'NOT SUPPORTED'}",
+        f"- Android mobile client: {'SUPPORTED (AndroidManifest found)' if evidence.get('has_android') else 'NOT SUPPORTED'}",
+        f"- iOS mobile client: {'SUPPORTED (Xcode/Podfile found)' if evidence.get('has_ios') else 'NOT SUPPORTED'}",
+        f"- GDPR/Compliance: {'SUPPORTED (Explicit GDPR/PII mention in docs)' if evidence.get('has_gdpr_mention') else 'NOT SUPPORTED (No GDPR/PII mention)'}",
+    ]
     
     user_prompt = (
         f"System Type: {business_context.get('product_type', 'Software System')}\n"
         f"Tech Stack: {', '.join(tech_stack) if tech_stack else 'Unknown/Generic'}\n"
-        f"Core Features: {', '.join(feature_names)}\n\n"
+        f"Core Features: {', '.join(feature_names)}\n"
+        f"Evidence Checklist (From codebase analysis):\n"
+        f"{chr(10).join(evidence_checklist)}\n\n"
         "Generate the enterprise artifacts JSON."
     )
     

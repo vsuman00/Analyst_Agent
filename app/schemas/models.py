@@ -344,3 +344,26 @@ class SkillExecutionResult(BaseModel):
     additional_features: List[Dict[str, Any]] = Field(default_factory=list)
     additional_signals: Dict[str, Any] = Field(default_factory=dict)
     brd_section_hints: Dict[str, str] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Entity Extraction Output schemas
+# ---------------------------------------------------------------------------
+
+class ExtractedEntity(BaseModel):
+    """
+    A domain entity or data model extracted during Phase 1.5 analysis.
+    """
+    name: str
+    source_file: str
+    table_name: Optional[str] = None
+    fields: List[str] = Field(default_factory=list)
+    entity_type: Literal["jpa_entity", "data_class", "proto_message", "generic_model"]
+
+
+class EntityExtractionResult(BaseModel):
+    """
+    Top-level output envelope for the entity extractor.
+    """
+    entities: List[ExtractedEntity] = Field(default_factory=list)
+

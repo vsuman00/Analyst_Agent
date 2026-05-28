@@ -23,8 +23,17 @@ def _display(name: str) -> str:
 def _rest_path(name: str) -> str:
     return "/" + name.lower().replace(" ", "-").replace("_", "-")
 
-def _has_keyword(keyword: str, text_list: List[str]) -> bool:
-    return any(keyword.lower() in t.lower() for t in text_list)
+def _has_keyword(kw: str, tech_stack) -> bool:
+    """Return True if kw appears (case-insensitive) anywhere in tech_stack.
+
+    Accepts tech_stack as List[str] (new canonical form) OR Dict[str, str]
+    (legacy form from older pipeline runs) — both are handled transparently.
+    """
+    if isinstance(tech_stack, dict):
+        haystack = " ".join(str(v) for v in tech_stack.values())
+    else:
+        haystack = " ".join(str(t) for t in (tech_stack or []))
+    return kw.lower() in haystack.lower()
 
 # ---------------------------------------------------------------------------
 # Section builders
@@ -442,45 +451,121 @@ def _s7_data_requirements(
 
 
 def _s8_tech_stack(biz: Dict) -> str:
-    tech_stack = biz.get("tech_stack", [])
-    if not tech_stack:
+    raw = biz.get("tech_stack", [])
+
+    # Normalise: accept both List[str] (new canonical) and Dict[str,str] (legacy).
+    # List[str]: each element IS the tech name (e.g. "Kotlin", "Gradle", "Docker").
+    # Dict[str,str]: values are the tech names; keys are internal role labels.
+    if isinstance(raw, dict):
+        tech_list = [v for v in raw.values() if v]
+    elif isinstance(raw, list):
+        tech_list = [str(t) for t in raw if t]
+    else:
+        tech_list = []
+
+    if not tech_list:
         return (
             "## 8. Technology Stack (TO-BE)\n\n"
-            "_Technology stack was not explicitly detected. Standard enterprise cloud-native defaults apply._\n\n---\n"
+            "_Technology stack could not be determined from static analysis. "
+            "Please specify the intended stack in Open Issues (Section 15)._\n\n---\n"
         )
 
-    # Plain-English purpose for common technologies
+    # Plain-English purpose lookup — matches by substring for maximum coverage.
+    # Keys are lowercase fragments; values are plain-English descriptions.
     _purposes = {
-        "python": "Primary programming language for backend logic",
-        "java": "Primary programming language for backend services",
-        "javascript": "Frontend and/or server-side scripting language",
-        "typescript": "Typed superset of JavaScript for safer frontend/backend code",
-        "go": "High-performance backend language",
-        "rust": "Systems-level language for performance-critical components",
-        "react": "User interface library for building interactive web pages",
-        "spring": "Java framework for building web APIs and services",
-        "fastapi": "Python framework for building web APIs",
-        "django": "Python framework for building full-stack web applications",
-        "postgres": "Relational database for structured data storage",
-        "postgresql": "Relational database for structured data storage",
-        "mysql": "Relational database for structured data storage",
-        "mongodb": "Document database for flexible, schema-less data storage",
-        "redis": "In-memory cache for fast data retrieval and session storage",
-        "docker": "Containerisation tool — packages the app for consistent deployment",
-        "kubernetes": "Container orchestration — manages deployment at scale",
-        "kafka": "Message streaming platform for real-time data pipelines",
-        "elasticsearch": "Search engine for fast full-text queries",
-        "nginx": "Web server and reverse proxy for routing incoming traffic",
-        "gradle": "Build automation tool for compiling and packaging code",
-        "maven": "Build and dependency management tool for Java projects",
-        "npm": "Package manager for JavaScript dependencies",
-        "pip": "Package manager for Python dependencies",
+        # Languages
+        "kotlin":        "Primary programming language",
+        "python":        "Primary programming language",
+        "javascript":    "Primary programming language",
+        "typescript":    "Typed superset of JavaScript for type-safe development",
+        "java":          "Primary programming language",
+        "go":            "High-performance backend language",
+        "rust":          "Systems-level language for performance-critical components",
+        "swift":         "Primary programming language (iOS/macOS)",
+        "ruby":          "Primary programming language",
+        "c#":            "Primary programming language (.NET)",
+        "csharp":        "Primary programming language (.NET)",
+        "scala":         "Functional/OO language on the JVM",
+        # Build tools
+        "gradle":        "Build automation and dependency management",
+        "maven":         "Build automation and dependency management (Java/Kotlin)",
+        "npm":           "Package manager for JavaScript/TypeScript",
+        "pip":           "Package manager for Python",
+        "cargo":         "Package manager and build tool for Rust",
+        "poetry":        "Python dependency and packaging manager",
+        # Platforms
+        "android":       "Target mobile platform (Android)",
+        "ios":           "Target mobile platform (iOS)",
+        "web":           "Target web platform",
+        "desktop":       "Target desktop platform",
+        "server":        "Server-side / backend platform",
+        # Web frameworks
+        "spring":        "Java/Kotlin enterprise web framework",
+        "react":         "Declarative UI library for web interfaces",
+        "angular":       "Frontend application framework",
+        "vue":           "Progressive frontend framework",
+        "svelte":        "Compile-time frontend framework",
+        "django":        "Python full-stack web framework",
+        "flask":         "Lightweight Python web framework",
+        "fastapi":       "High-performance async Python API framework",
+        "express":       "Minimal Node.js web framework",
+        "next":          "React-based full-stack framework",
+        "nuxt":          "Vue-based full-stack framework",
+        # Mobile / UI frameworks
+        "compose":       "Declarative UI toolkit",
+        "ktor":          "Asynchronous web framework for Kotlin",
+        "retrofit":      "Type-safe HTTP client for Android/JVM",
+        "okhttp":        "HTTP + HTTP/2 client for JVM",
+        "coroutines":    "Asynchronous/concurrent programming library",
+        "lifecycle":     "Android lifecycle-aware components",
+        "hilt":          "Dependency injection framework (Android)",
+        "dagger":        "Dependency injection framework",
+        "room":          "Android SQLite abstraction library",
+        "serialization": "Data serialisation library",
+        "coil":          "Image loading library for Android",
+        "glide":         "Image loading and caching library",
+        # Databases
+        "postgres":      "Relational database",
+        "mysql":         "Relational database",
+        "mongo":         "Document-oriented NoSQL database",
+        "redis":         "In-memory cache and data store",
+        "sqlite":        "Embedded relational database",
+        "realm":         "Mobile-first embedded database",
+        "h2":            "In-memory/embedded relational database (testing)",
+        "cassandra":     "Wide-column distributed database",
+        # Messaging / streaming
+        "kafka":         "Distributed message streaming platform",
+        "rabbitmq":      "Message broker",
+        "grpc":          "High-performance RPC framework",
+        "graphql":       "Query language for APIs",
+        # AI / ML
+        "openai":        "OpenAI API integration (LLM)",
+        "langchain":     "LLM orchestration framework",
+        "tensorflow":    "Machine learning framework",
+        "pytorch":       "Machine learning framework",
+        "sklearn":       "Machine learning library (scikit-learn)",
+        # Infra
+        "docker":        "Containerisation — packages app for consistent deployment",
+        "kubernetes":    "Container orchestration — manages deployment at scale",
+        "terraform":     "Infrastructure as code",
+        "ansible":       "Configuration management and automation",
+        # Testing
+        "junit":         "Unit testing framework (JVM)",
+        "pytest":        "Python testing framework",
+        "jest":          "JavaScript testing framework",
+        "espresso":      "Android UI testing framework",
     }
 
+    def _purpose(tech_name: str) -> str:
+        name_lower = tech_name.lower()
+        for fragment, desc in _purposes.items():
+            if fragment in name_lower:
+                return desc
+        return "Supporting technology component"
+
     rows = ""
-    for tech in tech_stack:
-        purpose = _purposes.get(tech.lower(), "Supporting technology component")
-        rows += f"| {tech} | Confirmed | Latest Stable / LTS | {purpose} |\n"
+    for tech in tech_list:
+        rows += f"| {tech} | Confirmed | Latest Stable | {_purpose(tech)} |\n"
 
     return (
         "## 8. Technology Stack (TO-BE)\n\n"

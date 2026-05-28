@@ -28,11 +28,12 @@ from typing import Dict, Any
 from app.analysis.brd_validator import validate_brd
 from app.schemas.models import BRDValidationResult
 
-def _apply_fixes(markdown: str, issues: list[str]) -> str:
+def _apply_fixes(markdown: str, issues: list[str], evidence: dict = None) -> str:
     """
     Apply deterministic fixes based on validation issues.
     """
     fixed = markdown
+    evidence = evidence or {}
 
     # 1. Fix storytelling intro
     if any("storytelling detected" in issue for issue in issues):
@@ -68,6 +69,58 @@ def _apply_fixes(markdown: str, issues: list[str]) -> str:
         if heading not in fixed:
             fixed += f"\n{heading}\n*{label} — content pending.*\n"
 
+    # 4. Fix Grounding / technology claim hallucinations
+    for issue in issues:
+        if "[GROUNDING]" in issue:
+            # Parse the ungrounded term from e.g., "[GROUNDING] BRD mentions 'Docker' but evidence key 'has_docker' is False."
+            match = re.search(r"mentions '([^']+)'", issue)
+            if match:
+                term = match.group(1)
+                term_lower = term.lower()
+                
+                # Apply deterministic tech claim replacements
+                if term_lower in ("docker", "dockerfile"):
+                    # Replace any table row containing Docker/Dockerfile with grounded local execution row
+                    fixed = re.sub(
+                        r'\|[^|]*Docker[^|]*\|[^|]*\|',
+                        '| Deployment | Local application execution as a standard operating system process |',
+                        fixed,
+                        flags=re.IGNORECASE
+                    )
+                    fixed = re.sub(r'\bDocker\b', 'standard process host', fixed, flags=re.IGNORECASE)
+                    fixed = re.sub(r'\bDockerfile\b', 'configuration script', fixed, flags=re.IGNORECASE)
+                elif term_lower in ("kubernetes", "k8s"):
+                    # Replace any table row containing Kubernetes/k8s with grounded single-node process management
+                    fixed = re.sub(
+                        r'\|[^|]*Kubernetes[^|]*\|[^|]*\|',
+                        '| Orchestration | Single-node application host process management |',
+                        fixed,
+                        flags=re.IGNORECASE
+                    )
+                    fixed = re.sub(
+                        r'\|[^|]*k8s[^|]*\|[^|]*\|',
+                        '| Orchestration | Single-node application host process management |',
+                        fixed,
+                        flags=re.IGNORECASE
+                    )
+                    fixed = re.sub(r'\bKubernetes\b', 'single-node server', fixed, flags=re.IGNORECASE)
+                    fixed = re.sub(r'\bk8s\b', 'single-node server', fixed, flags=re.IGNORECASE)
+                elif term_lower in ("gdpr", "ccpa"):
+                    fixed = re.sub(r'\bGDPR\b', 'Standard Security Practices', fixed, flags=re.IGNORECASE)
+                    fixed = re.sub(r'\bCCPA\b', 'Standard Security Practices', fixed, flags=re.IGNORECASE)
+                elif term_lower == "grpc":
+                    fixed = re.sub(r'\bgRPC\b', 'REST HTTP API', fixed, flags=re.IGNORECASE)
+                elif term_lower in ("rest api", "restful"):
+                    fixed = re.sub(r'\bREST APIs\b', 'external data service interfaces', fixed, flags=re.IGNORECASE)
+                    fixed = re.sub(r'\bREST API\b', 'external data service interface', fixed, flags=re.IGNORECASE)
+                    fixed = re.sub(r'\bRESTful\b', 'external data service interface', fixed, flags=re.IGNORECASE)
+                elif term_lower in ("ios", "app store"):
+                    fixed = re.sub(r'\biOS\b', 'web application client', fixed, flags=re.IGNORECASE)
+                    fixed = re.sub(r'\bApp Store\b', 'web deployment portal', fixed, flags=re.IGNORECASE)
+                elif term_lower in ("android", "google play"):
+                    fixed = re.sub(r'\bAndroid\b', 'web application client', fixed, flags=re.IGNORECASE)
+                    fixed = re.sub(r'\bGoogle Play\b', 'web deployment portal', fixed, flags=re.IGNORECASE)
+
     # Clean up double empty lines caused by replacements
     fixed = re.sub(r'\n{3,}', '\n\n', fixed)
     
@@ -99,7 +152,7 @@ def run_fix_loop(
         val_result = validate_brd(current_markdown, features, functional_requirements, evidence=evidence)
 
         if not val_result.needs_revision:
-            # Score >= 0.85, we are good
+            # Score >= 0.85 and no grounding errors, we are good
             return {
                 "final_markdown": current_markdown,
                 "final_validation": val_result.model_dump(),
@@ -107,7 +160,7 @@ def run_fix_loop(
             }
 
         # Needs revision -> apply deterministic fixes
-        current_markdown = _apply_fixes(current_markdown, val_result.issues)
+        current_markdown = _apply_fixes(current_markdown, val_result.issues, evidence=evidence)
         iteration += 1
 
     # Max iterations reached, return current state

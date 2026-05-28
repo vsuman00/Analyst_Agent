@@ -402,6 +402,15 @@ def _build_rich_context_str(repo_context: Dict) -> str:
             lines.append(f"  [{s['file']}]: {s['content'][:300]}")
         parts.append("\n".join(lines))
 
+    # PRIORITY 3.5: Domain Entities
+    entities = repo_context.get("data_entities", [])
+    if entities:
+        lines = ["=== PRIORITY 3.5: DOMAIN ENTITIES ==="]
+        for e in entities[:15]:
+            fields = ", ".join(e.get("fields", []))
+            lines.append(f"  {e.get('name')} ({e.get('entity_type')}): {fields}")
+        parts.append("\n".join(lines))
+
     # PRIORITY 4: Tech stack
     if tech:
         tech_str = "\n".join(f"  {k}: {v}" for k, v in tech.items())

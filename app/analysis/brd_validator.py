@@ -412,8 +412,9 @@ def _score_tech_grounding(
     failed = 0
 
     for brd_term, ev_key, required_true in _TECH_GROUNDING_CHECKS:
-        # Only check if the term actually appears in the BRD
-        if brd_term.lower() not in brd.lower():
+        # Use word boundary search (with optional plural 's') to avoid substring false positives (e.g. 'iOS' in 'scenarios')
+        pattern = re.compile(r'\b' + re.escape(brd_term) + r's?\b', re.IGNORECASE)
+        if not pattern.search(brd):
             continue
         total_checks += 1
         actual = bool(evidence.get(ev_key, False))
@@ -491,10 +492,18 @@ def validate_brd(
         4
     )
 
+    # Force a revision if there are any grounding failures or requirement hallucinations,
+    # ensuring the pipeline enters the self-annealing fix loop.
+    needs_revision = (
+        (aggregate_score < REVISION_THRESHOLD)
+        or (grounding_score < 1.0)
+        or (no_halluc_score < 1.0)
+    )
+
     return BRDValidationResult(
         score=aggregate_score,
         issues=all_issues,
-        needs_revision=aggregate_score < REVISION_THRESHOLD,
+        needs_revision=needs_revision,
     )
 
 

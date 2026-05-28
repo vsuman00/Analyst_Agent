@@ -77,6 +77,16 @@ _PACKAGE_JSON_DEP = re.compile(
 )
 
 
+def _clean_dep_name(raw: str) -> str:
+    """Strip leading/trailing quotes and whitespace from extracted dep names.
+
+    Kotlin DSL uses  implementation("group:artifact:version")  which can
+    leave a leading '"' in the captured group if the regex boundary lands
+    inside the string.  This normalises names for all callers.
+    """
+    return raw.strip().strip('"\' \\n\\r')
+
+
 def _categorize_dep(group: str, artifact: str) -> str:
     """Assign a category based on Maven group/artifact names."""
     key = f"{group}:{artifact}".lower()
@@ -133,18 +143,20 @@ def extract_dependencies(repo_dir: Path | str) -> Dict[str, Any]:
         for m in _GRADLE_PLUGIN_VERSION.finditer(text):
             kotlin_short, kv, plugin_id, pv = m.groups()
             if kotlin_short and kv:
-                _add(f"kotlin-{kotlin_short}", kv, "language")
+                _add(f"kotlin-{_clean_dep_name(kotlin_short)}", _clean_dep_name(kv), "language")
                 language = "kotlin"
             elif plugin_id and pv:
-                short_name = plugin_id.rsplit(".", 1)[-1]
+                short_name = _clean_dep_name(plugin_id.rsplit(".", 1)[-1])
                 cat = "framework" if "spring" in plugin_id.lower() else "build"
-                _add(short_name, pv, cat)
+                _add(short_name, _clean_dep_name(pv), cat)
                 if "kotlin" in plugin_id.lower():
                     language = "kotlin"
 
         # ext { version = "..." }
         for m in _GRADLE_EXT_VERSION.finditer(text):
             vname, vval = m.groups()
+            vname = _clean_dep_name(vname)
+            vval  = _clean_dep_name(vval)
             cat = "language" if "kotlin" in vname.lower() else "framework"
             _add(vname, vval, cat)
             if "kotlin" in vname.lower():
@@ -153,11 +165,14 @@ def extract_dependencies(repo_dir: Path | str) -> Dict[str, Any]:
         # Dependencies
         for m in _GRADLE_DEPENDENCY.finditer(text):
             group, artifact, version = m.groups()
-            _add(f"{group}:{artifact}", version.strip(), _categorize_dep(group, artifact))
+            group    = _clean_dep_name(group)
+            artifact = _clean_dep_name(artifact)
+            version  = _clean_dep_name(version)
+            _add(f"{group}:{artifact}", version, _categorize_dep(group, artifact))
 
         # JVM target
         for m in _GRADLE_JVM.finditer(text):
-            _add("jvm-target", m.group(1), "language")
+            _add("jvm-target", _clean_dep_name(m.group(1)), "language")
 
     # --- Maven ---
     pom_files = list(repo_dir.rglob("pom.xml"))

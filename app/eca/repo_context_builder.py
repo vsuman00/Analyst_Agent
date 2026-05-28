@@ -259,124 +259,159 @@ def build_intent_signals(repo_root: Path) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Tech Stack Detection (deterministic, from package.json deps)
+# Tech Stack Detection — evidence-driven, fully generic
 # ---------------------------------------------------------------------------
 
-# Maps dependency name patterns to human-readable tech stack labels
-_TECH_PATTERNS: List[tuple[re.Pattern, str, str]] = [
-    # (pattern, key, label)
-    (re.compile(r"^react$"),                           "framework",        "React"),
-    (re.compile(r"^next$"),                            "framework",        "Next.js"),
-    (re.compile(r"^vue$"),                             "framework",        "Vue.js"),
-    (re.compile(r"^@angular/core$"),                   "framework",        "Angular"),
-    (re.compile(r"^svelte$"),                          "framework",        "Svelte"),
-    (re.compile(r"^react-router"),                     "routing",          "React Router"),
-    (re.compile(r"^@tanstack/react-router"),           "routing",          "TanStack Router"),
-    (re.compile(r"^tailwindcss$"),                     "styling",          "TailwindCSS"),
-    (re.compile(r"^styled-components$"),               "styling",          "Styled Components"),
-    (re.compile(r"^zustand$"),                         "state_management", "Zustand"),
-    (re.compile(r"^redux$|^@reduxjs/toolkit$"),        "state_management", "Redux"),
-    (re.compile(r"^recoil$"),                          "state_management", "Recoil"),
-    (re.compile(r"^jotai$"),                           "state_management", "Jotai"),
-    (re.compile(r"^vite$"),                            "build_tool",       "Vite"),
-    (re.compile(r"^typescript$"),                      "language",         "TypeScript"),
-    (re.compile(r"^pdfjs-dist$|^react-pdf$"),          "libraries",        "PDF.js"),
-    (re.compile(r"^react-dropzone$"),                  "libraries",        "React Dropzone"),
-    (re.compile(r"^axios$|^node-fetch$|^swr$"),        "data_fetching",    "HTTP Client"),
-    (re.compile(r"^prisma$"),                          "orm",              "Prisma"),
-    (re.compile(r"^typeorm$"),                         "orm",              "TypeORM"),
-    (re.compile(r"^mongoose$"),                        "orm",              "Mongoose"),
-    (re.compile(r"^express$"),                         "server",           "Express"),
-    (re.compile(r"^fastapi$"),                         "server",           "FastAPI"),
-    (re.compile(r"^django$"),                          "server",           "Django"),
-    (re.compile(r"^flask$"),                           "server",           "Flask"),
-    (re.compile(r"^openai$"),                          "ai",               "OpenAI"),
-    (re.compile(r"^langchain"),                        "ai",               "LangChain"),
-    (re.compile(r"^socket\.io$|^ws$"),                 "realtime",         "WebSockets"),
-    (re.compile(r"^jest$|^vitest$|^pytest$"),          "testing",          "Test Framework"),
-    (re.compile(r"^docker$|^Dockerfile$"),             "infra",            "Docker"),
-]
+# Human-readable purpose labels for well-known dep name fragments.
+# This is a DISPLAY HINT only — not a detection mechanism.
+# Add entries here when you want a friendlier description in the BRD table.
+# Keys are lowercase substrings of dep names or category values.
+_TECH_PURPOSES: Dict[str, str] = {
+    # Languages / runtimes
+    "kotlin":          "Primary programming language",
+    "python":          "Primary programming language",
+    "javascript":      "Primary programming language",
+    "typescript":      "Typed superset of JavaScript",
+    "java":            "Primary programming language",
+    "go":              "Primary programming language",
+    "scala":           "Functional/OO language on the JVM",
+    "rust":            "Systems-level language",
+    "swift":           "Primary programming language (iOS/macOS)",
+    "ruby":            "Primary programming language",
+    "csharp":          "Primary programming language (.NET)",
+    # Build tools
+    "gradle":          "Build automation and dependency management",
+    "maven":           "Build automation and dependency management",
+    "npm":             "Package manager for JavaScript",
+    "pip":             "Package manager for Python",
+    "cargo":           "Package manager for Rust",
+    # Platforms
+    "android":         "Target mobile platform",
+    "ios":             "Target mobile platform",
+    "web":             "Target web platform",
+    "desktop":         "Target desktop platform",
+    "server":          "Server-side / backend platform",
+    # Infra
+    "docker":          "Containerisation — packages the app for consistent deployment",
+    "kubernetes":      "Container orchestration — manages deployment at scale",
+    # Common framework fragments (dep name substrings)
+    "spring":          "Java/Kotlin web application framework",
+    "react":           "User interface library",
+    "angular":         "Frontend application framework",
+    "vue":             "Frontend application framework",
+    "django":          "Python web framework",
+    "flask":           "Lightweight Python web framework",
+    "fastapi":         "High-performance Python API framework",
+    "express":         "Node.js web framework",
+    "next":            "React-based full-stack framework",
+    "compose":         "Declarative UI toolkit",
+    "retrofit":        "Type-safe HTTP client",
+    "okhttp":          "HTTP networking library",
+    "ktor":            "Asynchronous framework for Kotlin",
+    "coroutines":      "Asynchronous/concurrent programming library",
+    "serialization":   "Data serialisation library",
+    "hilt":            "Dependency injection framework",
+    "room":            "Android local database library",
+    "realm":           "Mobile-first database",
+    "postgres":        "Relational database",
+    "mysql":           "Relational database",
+    "mongo":           "Document-oriented database",
+    "redis":           "In-memory cache / data store",
+    "sqlite":          "Embedded relational database",
+    "kafka":           "Distributed message streaming platform",
+    "rabbitmq":        "Message broker",
+    "grpc":            "High-performance RPC framework",
+    "graphql":         "Query language for APIs",
+    "openai":          "AI/LLM integration",
+    "langchain":       "LLM orchestration framework",
+    "tensorflow":      "Machine learning framework",
+    "pytorch":         "Machine learning framework",
+    "junit":           "Unit testing framework",
+    "pytest":          "Python testing framework",
+    "jest":          "JavaScript testing framework",
+}
 
 
-def _detect_tech_stack(pkg_raw: Dict[str, Any], repo_root: Path) -> Dict[str, str]:
-    """Derive a human-readable tech stack from package manifest dependencies.
+def _purpose_for(tech_name: str) -> str:
+    """Return a human-readable purpose string for a technology name.
 
-    Falls back to file-extension scanning via language_registry.json when no
-    package manager manifest is present (e.g. PowerBuilder, COBOL, ABAP repos).
+    Looks for any key in _TECH_PURPOSES that appears as a substring of
+    the lowercased name.  Falls back to 'Supporting technology component'.
+    """
+    name_lower = tech_name.lower()
+    for fragment, purpose in _TECH_PURPOSES.items():
+        # Use word-boundary style match: fragment must be a whole word or
+        # appear at a token boundary to avoid 'r' matching 'Gradle', etc.
+        import re as _re
+        if _re.search(r'(?<![a-z])' + _re.escape(fragment) + r'(?![a-z])', name_lower):
+            return purpose
+    return "Supporting technology component"
+
+
+def _build_tech_stack_from_evidence(
+    dep_data: Dict[str, Any],
+    evidence: Dict[str, Any],
+) -> Dict[str, str]:
+    """Build a human-readable tech stack dict from already-extracted evidence.
+
+    This is the single authoritative source for tech_stack.  It consumes
+    the outputs of dependency_extractor and evidence_manifest — both of
+    which work generically across all build systems (Gradle, Maven, npm,
+    pip, Cargo, Go modules, etc.).
+
+    NO hardcoded language patterns live here.  Everything is derived from
+    what the extractors already found.
     """
     stack: Dict[str, str] = {}
 
-    all_deps = (
-        list(pkg_raw.get("dependencies", []))
-        + list(pkg_raw.get("dev_dependencies", []))
-    )
+    # 1. Primary language — dependency_extractor sets this for every build system
+    lang = dep_data.get("language", "unknown")
+    if lang and lang != "unknown":
+        stack["language"] = lang.title()   # "kotlin" → "Kotlin"
 
-    for dep in all_deps:
-        for pattern, key, label in _TECH_PATTERNS:
-            if pattern.match(dep):
-                if key not in stack:
-                    stack[key] = label
-                elif label not in stack[key]:
-                    stack[key] = f"{stack[key]}, {label}"
-                break
+    # 2. Build tool — gradle, maven, npm, pip, unknown
+    build_tool = dep_data.get("build_tool", "unknown")
+    if build_tool and build_tool != "unknown":
+        stack["build_tool"] = build_tool.title()
 
-    # ── Language detection from file extensions ───────────────────────────────
-    # Priority order: TypeScript > Python > Go > Rust > Java (web/backend first)
-    # then fall through to registry-based detection for all other languages.
-    if "language" not in stack:
-        if any(repo_root.rglob("*.ts")) or any(repo_root.rglob("*.tsx")):
-            stack["language"] = "TypeScript"
-        elif any(repo_root.rglob("*.py")):
-            stack["language"] = "Python"
-        elif any(repo_root.rglob("*.go")):
-            stack["language"] = "Go"
-        elif any(repo_root.rglob("*.rs")):
-            stack["language"] = "Rust"
-        elif any(repo_root.rglob("*.java")):
-            stack["language"] = "Java"
-        else:
-            # ── Registry-based fallback for non-web languages ─────────────────
-            # Iterate over every language in the registry and check whether any
-            # of its build_files exist in the repo root.  This catches
-            # PowerBuilder (.pbw/.pbt), COBOL (.cbl), ABAP (.abap), etc.
-            # without a single hardcoded extension here.
-            reg = _load_registry()
-            for lang_name, lang_def in reg.get("languages", {}).items():
-                build_files = lang_def.get("build_files", [])
-                found = any(
-                    (repo_root / bf).exists() or bool(list(repo_root.glob(f"**/*{bf}")))
-                    for bf in build_files
-                    if bf  # skip empty strings
-                )
-                if found:
-                    # Use the language's human-readable notes as the display label
-                    notes = lang_def.get("notes", lang_name)
-                    # Extract just the first segment before " — " for brevity
-                    display = notes.split(" — ")[0].strip() if " — " in notes else lang_name.title()
-                    stack["language"] = display
-                    # Add framework hint if the notes carry one
-                    if " — " in notes:
-                        stack["platform"] = notes.split(" — ", 1)[1].strip()
-                    break
+    # 3. Deployment platform — from evidence manifest
+    platform = evidence.get("platform", "unknown")
+    if platform and platform not in ("unknown", "library"):
+        stack["platform"] = platform.title()
 
-    # Detect versions from package.json
-    pkg_deps_with_versions = {}
-    p = repo_root / "package.json"
-    if p.exists():
-        try:
-            raw = json.loads(p.read_text(encoding="utf-8"))
-            pkg_deps_with_versions = {**raw.get("dependencies", {}), **raw.get("devDependencies", {})}
-        except Exception:
-            pass
+    # 4. Infra signals — evidence manifest file-system scan
+    if evidence.get("has_docker"):
+        stack["containerization"] = "Docker"
+    if evidence.get("has_kubernetes"):
+        stack["orchestration"] = "Kubernetes"
 
-    for key, label in list(stack.items()):
-        # Try to find version for main labels
-        clean_label = label.split(",")[0].strip().lower()
-        for dep_name, version in pkg_deps_with_versions.items():
-            if clean_label in dep_name.lower():
-                version = version.lstrip("^~>=")
-                stack[key] = f"{label} {version}"
-                break
+    # 5. Key framework/library deps — use the cleaned names from dependency_extractor.
+    #    We pick deps categorised as 'framework' or 'language' (non-build, non-test).
+    #    Limit to 8 entries so the BRD table stays readable.
+    import re as _re
+    skip_cats  = {"testing", "build"}
+    skip_names = {"jvm-target", "application", "android", "serialization"}
+    seen_labels: Set[str] = set()
+    dep_count = 0
+    for dep in dep_data.get("dependencies", []):
+        if dep_count >= 8:
+            break
+        cat  = dep.get("category", "")
+        name = dep.get("name", "").strip()
+        if cat in skip_cats:
+            continue
+        # Strip Maven/Gradle group prefix for display
+        display = name.split(":")[-1].strip() if ":" in name else name
+        # Aggressively strip any quote/whitespace/newline artifacts from the regex parser
+        display = _re.split(r'[\n\r"\\]', display)[0].strip().strip("' ")
+        if not display or display.lower() in skip_names:
+            continue
+        if display.lower() in seen_labels:
+            continue
+
+        seen_labels.add(display.lower())
+        stack[f"dep_{dep_count}"] = display
+        dep_count += 1
 
     return stack
 
@@ -514,6 +549,8 @@ def _select_key_snippets(
 def build_repo_context(
     repo_root_str: str,
     chunks_data: Dict[str, Any],
+    dep_data: Optional[Dict[str, Any]] = None,
+    evidence: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Build the full RepoContext from a cloned repo directory and chunk data.
@@ -524,6 +561,13 @@ def build_repo_context(
         Absolute or relative path to the cloned repository root.
     chunks_data : dict
         Output of content_processor.run_content_processor() — {"chunks": [...]}
+    dep_data : dict, optional
+        Output of dependency_extractor.extract_dependencies().  When supplied,
+        tech_stack is built from the actual extracted deps rather than from
+        heuristic file-extension scanning.  Strongly recommended.
+    evidence : dict, optional
+        Output of evidence_manifest.build_evidence_manifest().  Provides
+        platform, Docker, Kubernetes and other infrastructure signals.
 
     Returns
     -------
@@ -534,10 +578,14 @@ def build_repo_context(
 
     # 1. Intent signals (priority waterfall)
     intent_signals = build_intent_signals(repo_root)
+    intent_signals.pop("_pkg_raw", None)  # no longer needed — dep_data is the source
 
-    # 2. Tech stack
-    pkg_raw = intent_signals.pop("_pkg_raw", {})
-    tech_stack = _detect_tech_stack(pkg_raw, repo_root)
+    # 2. Tech stack — use evidence-driven builder when dep_data is available,
+    #    otherwise produce an empty dict (caller should supply dep_data).
+    tech_stack = _build_tech_stack_from_evidence(
+        dep_data  or {},
+        evidence  or {},
+    )
 
     # 3. File structure
     structure = _group_files_by_role(repo_root)
@@ -555,18 +603,18 @@ def build_repo_context(
         confidence_note = f"README present (source: {intent_signals.get('source', 'README')}) — high confidence context."
 
     context = {
-        "repo_name":       repo_name,
-        "intent_signals":  intent_signals,
-        "tech_stack":      tech_stack,
-        "structure":       structure,
+        "repo_name":         repo_name,
+        "intent_signals":    intent_signals,
+        "tech_stack":        tech_stack,
+        "structure":         structure,
         "key_file_snippets": key_snippets,
-        "no_readme":       no_readme,
-        "confidence_note": confidence_note,
+        "no_readme":         no_readme,
+        "confidence_note":   confidence_note,
     }
 
     print(f"[RepoContextBuilder] Built context for '{repo_name}':")
     print(f"  README source : {intent_signals.get('source', 'none')}")
-    print(f"  Tech stack    : {list(tech_stack.keys())}")
+    print(f"  Tech stack    : {list(tech_stack.values())}")
     print(f"  Routes        : {len(structure['routes'])} files")
     print(f"  Components    : {len(structure['components'])} files")
     print(f"  Key snippets  : {len(key_snippets)} selected")
