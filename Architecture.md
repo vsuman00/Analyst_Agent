@@ -1,7 +1,7 @@
 # Architecture — Analyst Agent
 
-> **Last updated:** 2026-05-24  
-> **Version:** 2.2 — Dynamic Skill Pack system + 9-dimension BRD validator
+> **Last updated:** 2026-05-28  
+> **Version:** 2.3 — Dynamic Skill Pack system + 9-dimension BRD validator + GPT-5/o-series support
 
 ---
 
@@ -33,15 +33,16 @@ GitHub Repository URL  ──►  Analyst Agent Pipeline  ──►  BRD (.md / 
 
 **Core capabilities:**
 - Clone and scan any public GitHub repository
-- Classify files by language and role using a data-driven registry
+- Classify files by language and role using a data-driven registry (40+ languages)
 - Extract features, entities, API routes, dependencies, and defect signals
+- Dynamically activate domain-specific skill packs for specialized analysis
 - Generate testable functional and non-functional requirements
 - Compose a validated 16-section enterprise BRD
 - Export to Markdown or Word (`.docx`)
 
 **Execution modes:**
 - **CLI** — `python -m app.pipeline.runner <repo_url>` (full end-to-end)
-- **API** — `uvicorn app.api.main:app` (FastAPI, 15 endpoints)
+- **API** — `uvicorn app.api.main:app` (FastAPI, ~20 endpoints)
 - **Deterministic-only** — runs without `OPENAI_API_KEY`; LLM phases silently skipped
 
 ---
@@ -99,7 +100,8 @@ GitHub Repo URL
 │                key_file_snippets, no_readme, confidence_note}      │
 │       │                                                             │
 │  [3.6] EvidenceManifest                                             │
-│       APIExtractor + DependencyExtractor + file system scan        │
+│       APIExtractor + DependencyExtractor + EntityExtractor         │
+│       + file system scan                                           │
 │       Output: RepoEvidenceManifest (has_http_api, has_docker,      │
 │               has_android, has_kubernetes, dep_categories, ...)    │
 │       │                                                             │
@@ -123,7 +125,7 @@ GitHub Repo URL
 │        Runs each activated pack's scripts as isolated subprocesses  │
 │        Collects domain features, signals, and BRD section hints     │
 │        All failures non-blocking (try/except per pack)              │
-│        Output: List[SkillExecutionResult]                           │
+│        Output: SkillExecutionResult                                 │
 └─────────────────────────────────────────────────────────────────────┘
        │
        ▼
@@ -172,13 +174,13 @@ GitHub Repo URL
 │       Keyword-triggered template selection (max 8 NFRs)            │
 │       Output: {non_functional_requirements[{id, category, desc}]}  │
 │       │                                                             │
-│  [3.5] LLM Enrichment  (optional, requires OPENAI_API_KEY)         │
+│  [3.5L] LLM Enrichment  (optional, requires OPENAI_API_KEY)        │
 │       enrich_features() — rewrite descriptions as SHALL-style      │
 │       enrich_core_value() — ≤30-word value statement               │
 │       enrich_enterprise_artifacts() — stakeholders, CI/CD, infra,  │
 │                                       data, compliance, risks      │
 │       │                                                             │
-│  [3.6] BusinessUnderstandingAgent                                   │
+│  [3.6L] BusinessUnderstandingAgent                                  │
 │       Keyword voting → {product_type, primary_users, core_value}   │
 │       │                                                             │
 │  [3.7] BRDEnrichmentAgent  (optional, 7 LLM calls)                 │
@@ -224,7 +226,7 @@ GitHub Repo URL
 │       Markdown → .docx via python-docx                             │
 │       Handles: tables, H1/H2/H3, bullets, inline markup, HR        │
 │       Output: BRD_<repo_name>.md + BRD_<repo_name>.docx            │
-│               saved to runtime/pipeline_out/                       │
+│               saved to runtime/pipeline_out/<repo_name>/brd/       │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -232,7 +234,7 @@ GitHub Repo URL
 
 **Path A — CLI (`run_end_to_end`)**
 
-All 10 stages run sequentially in `app/pipeline/runner.py`. Delegates to `run_full_pipeline_service()` for the shared orchestration core. Colored stage logging. Writes `BRD_<repo_name>.md` to `runtime/pipeline_out/`.
+All stages run sequentially in `app/pipeline/runner.py`. Delegates to `run_full_pipeline_service()` for the shared orchestration core. Colored stage logging. Writes `BRD_<repo_name>.md` to `runtime/pipeline_out/<repo_name>/brd/`.
 
 ```bash
 python -m app.pipeline.runner https://github.com/owner/repo --outdir runtime/pipeline_out
@@ -240,7 +242,7 @@ python -m app.pipeline.runner https://github.com/owner/repo --outdir runtime/pip
 
 **Path B — API (`/analyze-and-convert`)**
 
-`run_full_pipeline_service()` handles all 10 stages end-to-end — **not** `run_pipeline()`. The endpoint returns `{pipeline, brd, markdown, validation}`. The separate `/analyze` endpoint uses `run_pipeline()` for Phase 1 only.
+`run_full_pipeline_service()` handles all stages end-to-end — **not** `run_pipeline()`. The endpoint returns `{pipeline, brd, markdown, validation}`. The separate `/analyze` endpoint uses `run_pipeline()` for Phase 1 only.
 
 ```bash
 POST /analyze-and-convert  {"repo_url": "https://github.com/owner/repo"}
@@ -250,7 +252,7 @@ POST /analyze-and-convert  {"repo_url": "https://github.com/owner/repo"}
 
 | Function | Scope | Used By |
 |---|---|---|
-| `run_full_pipeline_service(repo_url, output_dir)` | All 10 stages — returns full result dict | `run_end_to_end()`, `/analyze-and-convert` |
+| `run_full_pipeline_service(repo_url, output_dir)` | All stages — returns full result dict | `run_end_to_end()`, `/analyze-and-convert` |
 | `run_end_to_end(repo_url, output_dir)` | CLI wrapper — calls `run_full_pipeline_service()`, writes BRD to disk | CLI `__main__` |
 | `run_pipeline(repo_url, output_path)` | Phase 1 only — clone → scan → classify → chunk → normalize | `/analyze` endpoint |
 
@@ -295,7 +297,7 @@ POST /analyze-and-convert  {"repo_url": "https://github.com/owner/repo"}
                          │
                          ▼
                   ┌────────────┐
-                  │  ANALYZED  │  FeatureExtraction + Validation done (skill features merged)
+                  │  ANALYZED  │  FeatureExtraction + Validation done
                   └─────┬──────┘
                          │
               ┌──────────┴──────────┐
@@ -350,7 +352,7 @@ POST /analyze-and-convert  {"repo_url": "https://github.com/owner/repo"}
 
 | Module | Function | Input | Output |
 |--------|----------|-------|--------|
-| `repo_scanner.py` | `scan_repository(repo_url, dest_dir)` | GitHub URL | `{repo_name, root_path, files[]}` |
+| `repo_scanner.py` | `scan_repository(repo_url, dest_dir, skip_clone)` | GitHub URL + dest path | `{repo_name, root_path, files[]}` |
 | `file_classifier.py` | `run_classifier(scan_output)` | scan output | `{classified_files[{path, category, confidence}]}` |
 | `content_processor.py` | `run_content_processor(classified_data, repo_dir)` | classified files + repo path | `{chunks[{chunk_id, file_path, category, content}]}` |
 | `language_loader.py` | `get_role(ext)`, `get_language(ext)`, `is_binary(ext)`, `is_entry_point(filename)` | file extension / name | role string / bool |
@@ -359,7 +361,7 @@ POST /analyze-and-convert  {"repo_url": "https://github.com/owner/repo"}
 | `entity_extractor.py` | `extract_entities(repo_dir)` | repo path | `{entities[{name, source_file, table_name, fields[], entity_type}]}` |
 | `dependency_extractor.py` | `extract_dependencies(repo_dir)` | repo path | `{dependencies[], build_tool, language, uses_jcenter}` |
 | `defect_extractor.py` | `extract_defects(repo_dir)` | repo path | `{defects[{id, type, severity, file, line, description}]}` |
-| `repo_context_builder.py` | `build_repo_context(repo_root, chunks_data)` | repo path + chunks | `RepoContext` dict |
+| `repo_context_builder.py` | `build_repo_context(repo_root, chunks_data, dep_data, evidence)` | repo path + chunks + deps + evidence | `RepoContext` dict |
 | `evidence_manifest.py` | `build_evidence_manifest(repo_dir, api_data, dep_data)` | repo path + extractor outputs | `RepoEvidenceManifest` dict |
 
 **`FileClassifier` category hierarchy (priority order):**
@@ -393,10 +395,10 @@ entry_point → config → route → service → component → unknown
 
 | Module | Function | Input | Output |
 |--------|----------|-------|--------|
-| `skill_loader.py` | `load_skills(packs_dir)` | packs directory path | `List[SkillPack]` — parsed SKILL.md metadata |
-| `skill_matcher.py` | `match_skills(packs, evidence, deps)` | all packs + repo evidence + dep list | `List[SkillActivation]` — scored matches above threshold |
-| `skill_executor.py` | `execute_skill(activation, repo_path)` | one `SkillActivation` + repo path | `SkillExecutionResult` — features + signals + hints |
-| `skill_composer.py` | `compose_skill(repo_context, evidence)` | `RepoContext` + evidence dict | generated `SkillPack` written to `packs/_generated/` |
+| `skill_loader.py` | `load_all_skills()` | packs directory (auto) | `List[SkillPack]` — parsed SKILL.md metadata |
+| `skill_matcher.py` | `detect_skill_packs(evidence, repo_context, dep_data)` | repo evidence + context + deps | `List[Tuple[SkillPack, float]]` — scored matches above threshold |
+| `skill_executor.py` | `execute_skill_packs(activated_packs, repo_path)` | activated packs + repo path | `SkillExecutionResult` — features + signals + hints |
+| `skill_composer.py` | `compose_missing_skill(evidence, repo_context, deps)` | evidence + context + deps | generated `SkillPack` written to `packs/_generated/` |
 
 **SKILL.md YAML Frontmatter Schema:**
 ```yaml
@@ -441,8 +443,9 @@ final         = max(evidence_score, dep_score, file_score)
 
 | Module | Function | Input | Output |
 |--------|----------|-------|--------|
-| `feature_extraction_agent.py` | `extract_features(modules, chunks, repo_context)` | normalized modules + chunks + RepoContext | `FeatureExtractionResult` |
+| `feature_extraction_agent.py` | `extract_features(modules, chunks, repo_context, skill_results)` | normalized modules + chunks + RepoContext + skill results | `FeatureExtractionResult` |
 | `feature_validator.py` | `validate_features(features)` | extracted features | `FeatureValidationResult` |
+| `feature_interpretation_agent.py` | `interpret_features(signals)` | raw signals | `FeatureInterpretationResult` |
 | `product_understanding_agent.py` | `understand_product(features, repo_context, evidence)` | validated features + context + evidence | `ProductUnderstandingResult` |
 | `business_understanding_agent.py` | `understand_business(features, system_type)` | validated features + system type | `BusinessUnderstandingResult` |
 | `functional_requirement_generator.py` | `generate_requirements(features)` | validated features | `FunctionalRequirementsResult` |
@@ -450,7 +453,7 @@ final         = max(evidence_score, dep_score, file_score)
 | `archetype_loader.py` | `get_domain_signals()` | — | `{archetype_key: {keywords, display, fragment}}` |
 | `payload_converter.py` | `build_brd(payload)` | final payload dict | `MinimalBRD` |
 | `brd_composer.py` | `compose_brd(biz_ctx, features, frs, nfrs, evidence)` | all analysis outputs | Markdown string |
-| `brd_enrichment_agent.py` | `enrich_brd_context(biz_ctx, features, fr_dict, nfr_dict, repo_context, evidence)` | all analysis outputs | enriched `biz_ctx` dict |
+| `brd_enrichment_agent.py` | `enrich_brd_context(biz_ctx, features, fr_dict, nfr_dict, repo_context)` | all analysis outputs | enriched `biz_ctx` dict |
 | `brd_validator.py` | `validate_brd(markdown, features, frs, evidence)` | BRD markdown + inputs | `BRDValidationResult` |
 | `brd_fix_loop.py` | `run_fix_loop(markdown, max_iterations, features, frs, evidence)` | initial BRD markdown | `{final_markdown, final_validation, iterations}` |
 | `document_generator.py` | `markdown_to_docx(brd_markdown, out_path)` | BRD markdown + output path | `.docx` file |
@@ -479,7 +482,7 @@ final         = max(evidence_score, dep_score, file_score)
 | `llm_enrichment.py` | `enrich_features(features)` | Rewrite descriptions as SHALL-style |
 | `llm_enrichment.py` | `enrich_executive_summary(biz_ctx, features)` | Generate ≤120-word exec summary |
 | `llm_enrichment.py` | `enrich_core_value(features)` | Generate ≤30-word core value statement |
-| `llm_enrichment.py` | `enrich_enterprise_artifacts(biz_ctx, features, tech_stack)` | Generate stakeholders, CI/CD, infra, data, compliance, risks |
+| `llm_enrichment.py` | `enrich_enterprise_artifacts(biz_ctx, features, tech_stack, evidence)` | Generate stakeholders, CI/CD, infra, data, compliance, risks |
 
 ### 5.6 Output Layer (`app/output/`)
 
@@ -514,7 +517,7 @@ The Skill Pack system is a **non-blocking, signal-driven intelligence layer** th
             │
             ▼
   FeatureExtractionAgent
-    ├── Receives skill_results: List[SkillExecutionResult]
+    ├── Receives skill_results: SkillExecutionResult
     ├── Prepends skill features to extracted features (deduped)
     └── Injects skill signals as additional context into LLM prompt
 ```
@@ -656,7 +659,27 @@ BRDValidationResult
 ├── issues: List[str]           ← specific, actionable violation messages
 └── needs_revision: bool        ← True if score < 0.85
 
-MinimalBRD  (from payload_converter.py — deterministic, no LLM)
+ExtractedEntity
+├── name: str                   ← entity/class name
+├── source_file: str            ← file where found
+├── table_name: Optional[str]   ← DB table name if JPA
+├── fields: List[str]           ← field/property names
+└── entity_type: Literal["jpa_entity","data_class","proto_message","generic_model"]
+
+SkillActivation
+├── skill_id: str               ← directory name of the pack
+├── skill_name: str             ← display_name from SKILL.md
+├── score: float                ← 0.0–1.0 max-of-dimensions score
+├── auto_generated: bool        ← True if from SkillComposer
+└── scripts_run: List[str]      ← script subcommands executed
+
+SkillExecutionResult
+├── activated_skills: List[SkillActivation]
+├── additional_features: List[Dict]  ← [{name, description, confidence}]
+├── additional_signals: Dict[str, Any]
+└── brd_section_hints: Dict[str, str]
+
+MinimalBRD (from payload_converter.py — deterministic, no LLM)
 ├── repo_name: str
 ├── summary: str
 ├── validation_score: float
@@ -665,23 +688,6 @@ MinimalBRD  (from payload_converter.py — deterministic, no LLM)
 ├── requirements: List[Requirement]
 ├── gaps: List[str]
 └── modules_detected: List[str]
-
-SkillActivation  (from skill_matcher.py)
-├── pack_id: str                ← directory name of the pack
-├── pack_name: str              ← display_name from SKILL.md
-├── score: float                ← 0.0–1.0 max-of-dimensions score
-├── matched_signals: List[str]  ← which evidence flags matched
-├── matched_deps: List[str]     ← which dependency keywords matched
-└── skill_pack: SkillPack       ← full parsed SKILL.md metadata
-
-SkillExecutionResult  (from skill_executor.py)
-├── pack_id: str
-├── pack_name: str
-├── features: List[Dict]        ← [{name, description, confidence}]
-├── signals: List[Dict]         ← [{key, value}] structured signals
-├── hints: List[str]            ← BRD section guidance strings
-├── error: Optional[str]        ← non-None if script failed
-└── execution_time_ms: int
 ```
 
 ### 7.2 Inter-Stage Data Contract
@@ -699,7 +705,7 @@ RepoScanner ──► {files[]} ──► FileClassifier ──► {classified_f
                                                     │  RepoContextBuilder ──► RepoContext
                                                     │       │
                                                     │       ▼
-                                                    │  APIExtractor + DependencyExtractor
+                                                    │  APIExtractor + DependencyExtractor + EntityExtractor
                                                     │       │
                                                     │       ▼
                                                     │  EvidenceManifest ──► RepoEvidence
@@ -722,7 +728,7 @@ RepoScanner ──► {files[]} ──► FileClassifier ──► {classified_f
                          SkillPackMatcher ──► List[SkillActivation]
                                     │
                                     ▼
-                         SkillPackExecutor ──► List[SkillExecutionResult]
+                         SkillPackExecutor ──► SkillExecutionResult
                                     │
                                     ▼
                          FeatureExtractionAgent ──► {features[]}
@@ -767,11 +773,16 @@ All LLM calls route through `app/utils/llm_client.py`. The pipeline **never bloc
 | Model | `OPENAI_MODEL` | `gpt-4o-mini` | Supports o1/o3/o4/gpt-5 families |
 | Max Tokens | `OPENAI_MAX_TOKENS` | `2048` | Per-call limit |
 | Temperature | — | `0` | Always 0, not configurable |
-| Retries | — | `3` | Exponential backoff |
-| JSON Min Tokens | `OPENAI_JSON_MIN_TOKENS` | `4096` | For o-series models |
+| Retries | — | `3` | Exponential backoff (2s, 4s, 6s) |
+| JSON Min Tokens | `OPENAI_JSON_MIN_TOKENS` | `4096` | For o-series/GPT-5 models |
 | Token Multiplier | `OPENAI_JSON_TOKEN_MULTIPLIER` | `3` | Headroom for JSON calls |
 | Reasoning Effort | `OPENAI_REASONING_EFFORT` | `minimal` | GPT-5 only |
 | Verbosity | `OPENAI_VERBOSITY` | `low` | GPT-5 only |
+
+**Model family detection:**
+- Models starting with `o1`, `o3`, `o4` or containing `gpt-5` use `max_completion_tokens` instead of `max_tokens`
+- These models do not accept the `temperature` parameter
+- GPT-5 models additionally accept `reasoning_effort` and `verbosity`
 
 ### 8.2 LLM Call Map
 
@@ -808,7 +819,7 @@ Phase 3.5 — Core Value Statement  (optional)
 
 Phase 3.5 — Enterprise Artifacts  (optional)
   llm_enrichment.enrich_enterprise_artifacts()
-    └── llm_json_call(ENTERPRISE_ARTIFACTS_PROMPT, system_type + tech_stack + features)
+    └── llm_json_call(ENTERPRISE_ARTIFACTS_PROMPT, system_type + tech_stack + features + evidence)
         Fallback: {} (BRDComposer uses deterministic section templates)
 
 Phase 3.7 — BRD Deep Enrichment  (optional, 7 calls)
@@ -823,7 +834,7 @@ Phase 3.7 — BRD Deep Enrichment  (optional, 7 calls)
         All fallback: {} (BRDComposer uses deterministic section templates)
 
 Phase 1.5 — Skill Composer  (optional, fires only when no pack matches)
-  SkillComposer.compose_skill()
+  SkillComposer.compose_missing_skill()
     └── llm_text_call(COMPOSE_SYSTEM_PROMPT, repo_context + evidence)
         Output: SKILL.md content (Markdown)
         Fallback: None — skill stage skipped, pipeline continues
@@ -846,7 +857,7 @@ The FastAPI server is started with:
 ```bash
 uvicorn app.api.main:app --reload
 # UI:     http://localhost:8000
-# Docs:  http://localhost:8000/docs
+# Docs:   http://localhost:8000/docs
 # Health: http://localhost:8000/health
 ```
 
@@ -877,10 +888,10 @@ uvicorn app.api.main:app --reload
 
 | Method | Path | Input | Output |
 |--------|------|-------|--------|
-| `GET` | `/skills` | — | `{status, curated[], generated[]}` — all skill packs |
-| `GET` | `/skills/{id}` | — | `{status, pack: SkillPack}` — full metadata + instructions |
-| `POST` | `/skills/compose` | `{repo_context, evidence}` | `{status, pack: SkillPack}` — LLM-generated pack |
-| `PUT` | `/skills/{id}/promote` | — | `{status, message}` — move generated → curated |
+| `GET` | `/skills` | — | `{skill_packs[], total, curated, generated}` |
+| `GET` | `/skills/{id}` | — | Full skill pack metadata + instructions |
+| `POST` | `/skills/compose` | `{evidence, repo_context, detected_deps?}` | `{status, skill_id, name, ...}` |
+| `PUT` | `/skills/{id}/promote` | — | `{status, from, to}` — move generated → curated |
 
 ### 9.4 Download Endpoints
 
@@ -930,7 +941,6 @@ Single source of truth for all language knowledge. **Zero Python changes require
       "binary": false,
       "notes": "CPython, PyPy"
     }
-    // ... 40+ languages total
   }
 }
 ```
@@ -949,12 +959,11 @@ Drives `ProductUnderstandingAgent` keyword voting fallback. **Zero Python change
       "display": "API Backend Service",
       "fragment": "backend API service exposing structured endpoints"
     }
-    // ... 13 archetypes total
   }
 }
 ```
 
-**Registered archetypes:** social_platform, api_backend_service, data_platform, auth_service, e_commerce, devops_toolchain, desktop_ui_app, ml_ai_platform, mobile_app, iot_edge, reporting_analytics, cms_content, erp_enterprise
+**Registered archetypes (13):** social_platform, api_backend_service, data_platform, auth_service, e_commerce, devops_toolchain, desktop_ui_app, ml_ai_platform, mobile_app, iot_edge, reporting_analytics, cms_content, erp_enterprise
 
 ---
 
@@ -990,7 +999,7 @@ LLM call attempted
 | API endpoint exception | `try/except` in all route handlers → `HTTPException(500, detail=str(e))` + `traceback.print_exc()` |
 | No skill pack matches + no LLM key | Skill stage entirely skipped, pipeline continues without augmentation |
 | Skill script subprocess timeout | Caught by executor; empty result returned; pack contributes nothing |
-| Skill script invalid JSON output | Caught; error captured in `SkillExecutionResult.error`; pipeline continues |
+| Skill script invalid JSON output | Caught; error captured in `SkillExecutionResult`; pipeline continues |
 
 ### 11.3 BRD Validation — 9 Dimensions
 
@@ -1019,7 +1028,7 @@ LLM call attempted
 | 2 | **Data-First** | Pydantic schemas defined before code. All inter-stage outputs are validated. `app/schemas/models.py` is the single contract. |
 | 3 | **No Hallucination** | Full structured context injected into every prompt. `temperature=0`. Semantic pruning removes false positives. `RepoEvidenceManifest` prevents phantom tech claims. |
 | 4 | **Absolute Traceability** | Every feature maps to `source_modules[]` evidence. Every FR maps to a `linked_feature`. BRDValidator enforces this across 9 scoring dimensions. |
-| 5 | **Repository Isolation** | Each run clones into `runner_<repo_name>/`. Successive runs never cross-contaminate. |
+| 5 | **Repository Isolation** | Each run clones into `<repo_name>/repo/src/`. Successive runs never cross-contaminate. |
 | 6 | **Self-Annealing** | BRD score < 0.85 → `BRDFixLoop` applies deterministic patches → re-validates. Max 2 iterations. |
 | 7 | **Zero Hardcoded Language Facts** | All 40+ languages live in `language_registry.json`. All 13 archetypes live in `archetype_registry.json`. Adding support requires only a JSON entry. |
 | 8 | **Evidence-Grounded Output** | `RepoEvidenceManifest` is assembled from actual file system inspection (not keyword guessing). BRD sections check evidence flags before writing platform/infra/compliance content. |
@@ -1036,13 +1045,13 @@ LLM call attempted
 Analyst-Agent/
 ├── app/
 │   ├── api/
-│   │   └── main.py                         # FastAPI entry point — all 15 routes
+│   │   └── main.py                         # FastAPI entry point — ~20 routes
 │   ├── pipeline/
 │   │   └── runner.py                       # Master orchestrator (run_full_pipeline_service + run_end_to_end + run_pipeline)
 │   │
 │   ├── eca/                                # Stage 1: Extract, Classify, Aggregate
 │   │   ├── repo_scanner.py                 # git clone + os.walk file scan
-│   │   ├── file_classifier.py              # Path heuristics + registry role lookup
+│   │   ├── file_classifier.py             # Path heuristics + registry role lookup
 │   │   ├── content_processor.py            # Chunked file content reader (~3200 chars/chunk)
 │   │   ├── language_loader.py              # LRU-cached pure reader over language_registry.json
 │   │   ├── extractor.py                    # Standalone ECA orchestrator (builds ECAOutput)
@@ -1087,26 +1096,15 @@ Analyst-Agent/
 │   │   ├── skill_composer.py               # LLM auto-generation of novel skill packs
 │   │   └── packs/
 │   │       ├── web_api/                    # REST/gRPC API analysis
-│   │       │   ├── SKILL.md
-│   │       │   ├── scripts/api_extractor.py
-│   │       │   └── references/rest_patterns.md
 │   │       ├── ml_pipeline/                # ML model & training pipeline analysis
-│   │       │   ├── SKILL.md
-│   │       │   └── scripts/model_extractor.py
 │   │       ├── data_platform/              # Data pipeline & warehouse analysis
-│   │       │   ├── SKILL.md
-│   │       │   └── scripts/pipeline_extractor.py
 │   │       ├── mobile_app/                 # Android/iOS screen & permission analysis
-│   │       │   ├── SKILL.md
-│   │       │   └── scripts/screen_extractor.py
 │   │       ├── cli_tool/                   # CLI framework instructions (no scripts)
-│   │       │   └── SKILL.md
 │   │       └── _generated/                 # Auto-generated packs (gitignored contents)
-│   │           └── .gitkeep
 │   │
 │   ├── utils/
-│   │   ├── llm_client.py                   # OpenAI wrapper (retry, JSON mode, temperature=0)
-│   │   └── llm_enrichment.py               # 5 enrichment functions + hallucination pruning
+│   │   ├── llm_client.py                   # OpenAI wrapper (retry, JSON mode, temperature=0, o-series/GPT-5)
+│   │   └── llm_enrichment.py              # 5 enrichment functions + hallucination pruning
 │   │
 │   ├── output/
 │   │   └── final_output_builder.py         # Merges Phase 1 outputs into canonical payload
@@ -1115,9 +1113,11 @@ Analyst-Agent/
 │   │   └── models.py                       # ★ All Pydantic models and data contracts
 │   │
 │   ├── validation/                         # Validation utilities
-│   ├── tests/                              # pytest test suite
-│   └── graphify-out/
-│       └── cache/                          # 50 cached pipeline run JSON files
+│   └── tests/                              # pytest test suite
+│       ├── test_brd_grounding.py
+│       ├── test_entity_extractor.py
+│       ├── test_llm_client.py
+│       └── test_pipeline.py
 │
 ├── architecture/
 │   ├── pipeline_sop.md                     # Pipeline Standard Operating Procedure
@@ -1126,10 +1126,13 @@ Analyst-Agent/
 │
 ├── runtime/
 │   └── pipeline_out/                       # All generated BRD artifacts (.md, .docx)
-│       └── runner_<repo_name>/             # Isolated clone directory per run
+│       └── <repo_name>/                    # Isolated per-repo directory
+│           ├── brd/                        # Final BRD output
+│           ├── debug/                      # Intermediate JSON dumps
+│           └── repo/src/                   # Cloned source code
 │
 ├── static/
-│   └── index.html                          # Frontend UI
+│   └── index.html                          # Frontend UI (Tailwind CSS dark-mode)
 │
 ├── .env.example                            # Environment variable template
 ├── .env                                    # Local secrets (gitignored)
@@ -1174,21 +1177,6 @@ Or let `SkillComposer` auto-generate one on first encounter of a novel repo type
 | Add new API endpoint | `app/api/main.py` |
 | Add/modify Pydantic schemas | `app/schemas/models.py` |
 
-### Adding a New Analysis Agent
-1. Define output schema in `app/schemas/models.py`
-2. Create `app/analysis/<agent_name>.py` with a public function + CLI `__main__`
-3. Register in `app/pipeline/runner.py`
-4. Add API endpoint in `app/api/main.py`
-
-### Adding a New File Extractor
-1. Create `app/eca/<extractor_name>.py`
-2. Register in `app/eca/extractor.py`
-
-### Adding a New BRD Section
-1. Add section builder function in `app/analysis/brd_composer.py`
-2. Add heading to `REQUIRED_SECTIONS` in `app/analysis/brd_validator.py`
-3. Update Table of Contents in `_cover()` in `brd_composer.py`
-
 ### Running Tests
 ```bash
 pytest app/tests/ -v
@@ -1196,26 +1184,13 @@ pytest app/tests/ -v
 
 ### Running Individual Tools (CLI)
 ```bash
+python -m app.pipeline.runner <repo_url> --outdir runtime/pipeline_out
 python -m app.eca.repo_scanner <repo_url>
 python -m app.eca.language_loader                          # self-test
-python -m app.analysis.feature_extraction_agent --modules ... --chunks ...
-python -m app.analysis.feature_validator --features ...
-python -m app.analysis.brd_validator --brd ... --features ... --requirements ...
-python -m app.analysis.document_generator --brd ... --out ...
 python -m app.analysis.archetype_loader                    # self-test
+python -m app.output.final_output_builder --scan ... --classified ... --chunks ... --modules ... --validation ...
 ```
 
-### Skill Pack Quick Test
-```bash
-# Test loader — all 5 seed packs
-python -m app.skills.skill_loader
+---
 
-# Test matcher against a live repo evidence snapshot
-python -c "
-from app.skills.skill_loader import load_skills
-from app.skills.skill_matcher import match_skills
-packs = load_skills()
-matches = match_skills(packs, evidence={'has_http_api': True}, deps=['fastapi'])
-for m in matches: print(m['pack_id'], m['score'])
-"
-```
+*Last updated: 2026-05-28*

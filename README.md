@@ -15,16 +15,21 @@ GitHub Repo URL
     → [2] FileClassifier      — categorize source files (driven by language_registry.json)
     → [3] ContentProcessor    — chunk & extract content
     → [3.1] Sub-Extractors    — API, Entity, Dependency, Defect signal extraction
+    → [3.5] RepoContextBuilder — priority waterfall intent signals
+    → [3.6] EvidenceManifest  — structured repo evidence from file system + extractors
     → [4] ContextAggregator & Normalizer
-    → [5] FeatureExtractionAgent
+    → [4.5] SkillPackMatcher  — dynamic skill pack detection (threshold 0.5)
+    → [4.7] SkillPackExecutor — run activated skill scripts
+    → [5] FeatureExtractionAgent (LLM-primary + skill features merged)
     → [6] FeatureValidator
     → [6.5] Semantic Feature Pruning (LLM, optional)
     → [7] ProductUnderstandingAgent
     → [8] FunctionalRequirementGenerator
     → [9] NonFunctionalRequirementGenerator
-    → [3.5] LLM Enrichment (optional)
-    → [3.6] BusinessUnderstandingAgent
-    → [10] BRDComposer → BRDFixLoop → BRD (.md / .docx)
+    → [3.5L] LLM Enrichment (optional)
+    → [3.6L] BusinessUnderstandingAgent
+    → [3.7] BRD Deep Enrichment (7 LLM calls, optional)
+    → [10] BRDComposer → BRDValidator → BRDFixLoop → BRD (.md / .docx)
 ```
 
 **3-Layer Architecture (A.N.T.):**
@@ -39,8 +44,8 @@ GitHub Repo URL
 
 ```
 CREATED → INGESTING → ECA_DONE → CONTEXT_READY → NORMALIZED → VALIDATED
-        → ANALYZED → [LLM_ENRICHED] → BRD_READY → VALIDATING → IMPROVING
-        → COMPLETED / FAILED
+        → SKILLS_ACTIVATED → ANALYZED → [LLM_ENRICHED] → BRD_READY
+        → VALIDATING → IMPROVING → COMPLETED / FAILED
 ```
 
 ---
@@ -77,6 +82,12 @@ Open `.env` and configure your keys:
 OPENAI_API_KEY=sk-your-key-here
 OPENAI_MODEL=gpt-4o-mini         # Optional, default: gpt-4o-mini
 OPENAI_MAX_TOKENS=2048           # Optional, default: 2048
+
+# GPT-5 / o-series model tuning (optional)
+OPENAI_JSON_MIN_TOKENS=4096
+OPENAI_JSON_TOKEN_MULTIPLIER=3
+OPENAI_REASONING_EFFORT=minimal
+OPENAI_VERBOSITY=low
 ```
 
 > **Note:** If `OPENAI_API_KEY` is not set, the pipeline runs in **deterministic-only mode**. LLM enrichment and hallucination-pruning steps are silently skipped — the pipeline always produces a valid BRD.
@@ -106,28 +117,56 @@ python -m app.pipeline.runner <GITHUB_REPO_URL> [--outdir runtime/pipeline_out]
 python -m app.pipeline.runner https://github.com/owner/repo --outdir runtime/pipeline_out
 ```
 
-The final BRD Markdown file will be written to `runtime/pipeline_out/BRD_<repo_name>.md`.
+The final BRD Markdown file will be written to `runtime/pipeline_out/<repo_name>/brd/BRD_<repo_name>.md`.
+
+---
+
+## Dynamic Skill Pack System
+
+The pipeline includes a **non-blocking, signal-driven intelligence layer** that fires between the Evidence Manifest stage and Feature Extraction. It dynamically detects the repository's domain and activates specialized analysis packs.
+
+**5 Seed Packs included:**
+
+| Pack | Domain | Script |
+|---|---|---|
+| `web_api` | REST/gRPC API analysis | `api_extractor.py` |
+| `ml_pipeline` | ML model & training pipeline | `model_extractor.py` |
+| `data_platform` | Data pipeline & warehouse | `pipeline_extractor.py` |
+| `mobile_app` | Android/iOS screen & permissions | `screen_extractor.py` |
+| `cli_tool` | CLI framework analysis | Instructions only |
+
+If no existing pack matches (score < 0.5), the **SkillComposer** auto-generates a new pack via LLM and saves it for future reuse.
 
 ---
 
 ## LLM Integration
 
-OpenAI is used in **two optional, non-blocking phases**:
+OpenAI is used in **multiple optional, non-blocking phases**:
+
+### Phase 2 — Feature Extraction (LLM-primary)
+Uses RepoContext (README + structure + snippets) as grounding for feature extraction. Falls back to module-name-based features if LLM unavailable.
 
 ### Phase 2.5 — Semantic Feature Pruning
-Removes hallucinated features that are semantically inconsistent with the actual repository context. Runs after `FeatureValidator` and before `ProductUnderstandingAgent`.
+Removes hallucinated features that are semantically inconsistent with the actual repository context. Uses README as ground truth.
+
+### Phase 3 — Product Archetype Detection
+LLM detects product archetype from evidence + features. Falls back to keyword voting via `archetype_registry.json`.
 
 ### Phase 3.5 — LLM Enrichment
-Enriches three specific outputs before BRD composition:
+Enriches specific outputs before BRD composition:
 
 | Enrichment Target | LLM Task | Fallback |
 |---|---|---|
 | **Feature Descriptions** | Rewrites terse extracted descriptions into precise SHALL-style sentences | Original deterministic description |
 | **Core Value Statement** | Writes a ≤30-word value delivery statement from the feature list | Concatenated feature name list |
-| **Enterprise Artifacts** | Generates Data Strategy, Infrastructure, and Risk Register sections | Template-based deterministic output |
+| **Enterprise Artifacts** | Generates Stakeholders, CI/CD, Infra, Data, Compliance, Risks | Template-based deterministic output |
+
+### Phase 3.7 — BRD Deep Enrichment (7 LLM calls)
+Generates detailed, grounded content for Executive Summary, Business Context, Stakeholders, Functional Requirements, NFR SLAs, Delivery Roadmap, and Open Issues.
 
 **Guarantees:**
 - All prompts supply the full structured context. `temperature=0` is enforced.
+- Supports o1/o3/o4/gpt-5 model families with automatic parameter adaptation.
 - If any LLM call fails, the deterministic fallback is used — **the pipeline never blocks on LLM availability**.
 
 ---
@@ -135,18 +174,18 @@ Enriches three specific outputs before BRD composition:
 ## Pipeline Stages (Detailed)
 
 ### Stage 1: ECA — Extract, Classify, Aggregate
-- **RepoScanner**: Clones the target repository into an isolated `runner_<repo_name>/` subdirectory. Binary detection and ignored directories are driven by `language_registry.json`.
+- **RepoScanner**: Clones the target repository into an isolated `<repo_name>/repo/src/` subdirectory. Binary detection and ignored directories are driven by `language_registry.json`.
 - **FileClassifier**: Classifies files into `frontend`, `backend`, `config`, `docs`, `unknown` using the language registry.
-- **ContentProcessor**: Reads and chunks file content, respecting token budgets.
-- **Sub-Extractors** (run in parallel against content chunks):
-  - `api_extractor.py` — Detects API route definitions and endpoint patterns.
-  - `entity_extractor.py` — Identifies domain entities and data models.
-  - `dependency_extractor.py` — Parses dependency manifests (`package.json`, `requirements.txt`, `pom.xml`, etc.).
-  - `defect_extractor.py` — Scans for TODO/FIXME/HACK markers as quality signals.
+- **ContentProcessor**: Reads and chunks file content (~3200 chars/chunk), respecting token budgets.
+- **Sub-Extractors** (run against content and file system):
+  - `api_extractor.py` — Detects API route definitions and gRPC RPC endpoints.
+  - `entity_extractor.py` — Identifies domain entities (JPA, Kotlin data class, proto message).
+  - `dependency_extractor.py` — Parses dependency manifests (`package.json`, `requirements.txt`, `pom.xml`, `build.gradle`, etc.).
+  - `defect_extractor.py` — Scans for TODO/FIXME/HACK markers and hardcoded credentials.
   - `extractor.py` — Orchestrates all sub-extractors into a unified extraction result.
 
 ### Stage 1.1: Language Registry (`app/eca/config/language_registry.json`)
-The `language_registry.json` is the **single source of truth** for all language knowledge. It governs:
+The `language_registry.json` is the **single source of truth** for all language knowledge (40+ languages). It governs:
 - File extension → language name mapping
 - Language role classification (`frontend`, `backend`, `config`, `docs`)
 - Binary and ignored-directory skip lists
@@ -154,33 +193,43 @@ The `language_registry.json` is the **single source of truth** for all language 
 
 The `language_loader.py` module exposes a pure-read, LRU-cached API over the registry. **No language facts are hardcoded anywhere in the tool layer.**
 
+### Stage 1.5: Context & Evidence
+- **RepoContextBuilder**: Priority waterfall (README → package.json → pyproject.toml → Cargo.toml → entry point docstring → `[NO_DOCUMENTATION]`).
+- **EvidenceManifest**: Assembles structured evidence about what the repo actually contains (Docker, Kubernetes, HTTP API, gRPC, database, auth, Android, iOS, GDPR mentions, tests).
+
 ### Stage 2: Context Intelligence
-- **ContextAggregator**: Combines scan data, classified files, and content chunks.
-- **ContextNormalizer**: Normalizes into a list of weighted modules.
+- **ContextAggregator**: Combines scan data, classified files, and content chunks into modules.
+- **ContextNormalizer**: Normalizes into a list of weighted modules (snake_case, dedup, noise removal).
 - **ContextValidator**: Validates completeness of the normalized context.
 
+### Stage 2.5: Skill Pack Activation
+- **SkillPackMatcher**: Scores all available skill packs against repo evidence using max-of-dimensions algorithm.
+- **SkillPackExecutor**: Runs activated pack scripts as isolated subprocesses, collecting domain features and signals.
+- **SkillComposer** (fallback): Auto-generates a new skill pack via LLM if no existing pack matches.
+
 ### Stage 3: Rule-Based Analysis
-- **FeatureExtractionAgent** — Scans codebase against a dynamic, LLM-readable signal registry.
-- **FeatureValidator** — Merges overlapping features, deduplicates, and normalises names to `snake_case`.
-- **[Phase 2.5] Semantic Pruning** — LLM cross-checks extracted features against actual repository context.
-- **ProductUnderstandingAgent** — Derives product archetype, summary, and core capabilities from validated feature clusters.
-- **BusinessUnderstandingAgent** — Derives `product_type`, `primary_users`, `core_value`, and enterprise artifact inputs.
+- **FeatureExtractionAgent** — LLM-primary extraction with skill features merged and deduped.
+- **FeatureValidator** — 3-pass: exact dedup → merge groups → snake_case normalisation.
+- **[Phase 2.5] Semantic Pruning** — LLM cross-checks extracted features against README.
+- **ProductUnderstandingAgent** — LLM archetype detection with keyword voting fallback.
+- **BusinessUnderstandingAgent** — Derives `product_type`, `primary_users`, `core_value`.
 - **FunctionalRequirementGenerator** — Maps each validated feature to 1–3 testable FRs with acceptance criteria.
 - **NonFunctionalRequirementGenerator** — Generates 5–8 system-level NFRs from tech stack signals.
 
-### Stage 3.5: LLM Enrichment *(requires OPENAI_API_KEY)*
+### Stage 3.5–3.7: LLM Enrichment *(requires OPENAI_API_KEY)*
 - Enrich feature descriptions and core value via OpenAI (JSON mode, `temperature=0`).
-- Generate enterprise artifact sections (Data Strategy, Infrastructure, Risk Register).
-- Managed by `app/analysis/brd_enrichment_agent.py`.
+- Generate enterprise artifact sections (Stakeholders, Data, CI/CD, Infrastructure, Compliance, Risks).
+- BRD Deep Enrichment: 7 targeted LLM calls for section-level content generation.
+- Managed by `app/utils/llm_enrichment.py` and `app/analysis/brd_enrichment_agent.py`.
 
 ### Stage 4: BRD Composition & Validation
-- **BRDComposer** — Assembles all structured inputs into a comprehensive enterprise BRD in Markdown (16 required sections).
-- **BRDValidator** — Scores the BRD across **8 dimensions** (threshold: 0.85). See [BRD Validation](#brd-validation) below.
+- **BRDComposer** — Assembles all structured inputs into a comprehensive enterprise BRD in Markdown (16 required sections). Evidence-aware: checks `RepoEvidenceManifest` before writing platform/infra/compliance claims.
+- **BRDValidator** — Scores the BRD across **9 dimensions** (threshold: 0.85). See [BRD Validation](#brd-validation) below.
 - **BRDFixLoop** — Applies up to 2 deterministic repair passes if score < 0.85.
 
 ### Stage 5: Export
 - **DocumentGenerator** — Converts the final BRD Markdown to a professional `.docx` file.
-- Output saved to: `runtime/pipeline_out/BRD_<repo_name>.md`
+- Output saved to: `runtime/pipeline_out/<repo_name>/brd/BRD_<repo_name>.md`
 
 ---
 
@@ -228,6 +277,15 @@ The `BRDValidator` scores every generated BRD across **9 equal-weight dimensions
 | `POST` | `/validate-brd` | Run `BRDValidator` (9-dimension scoring) |
 | `POST` | `/fix-brd` | Run `BRDFixLoop` |
 
+### Skill Pack Management
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/skills` | List all available skill packs (curated + generated) |
+| `GET` | `/skills/{id}` | Get full details of a specific skill pack |
+| `POST` | `/skills/compose` | Manually trigger LLM skill pack composition |
+| `PUT` | `/skills/{id}/promote` | Promote a generated pack to stable curated status |
+
 ### Download
 
 | Method | Path | Description |
@@ -251,12 +309,12 @@ The `BRDValidator` scores every generated BRD across **9 equal-weight dimensions
 Analyst-Agent/
 ├── app/
 │   ├── api/
-│   │   └── main.py                         # FastAPI entry point — all 15 routes
+│   │   └── main.py                         # FastAPI entry point — ~20 routes
 │   ├── pipeline/
 │   │   └── runner.py                       # Master orchestrator (run_full_pipeline_service + run_end_to_end + run_pipeline)
 │   ├── eca/                                # Stage 1: Extract, Classify, Aggregate
 │   │   ├── repo_scanner.py                 # git clone + os.walk file scan
-│   │   ├── file_classifier.py              # Path heuristics + language_registry.json role lookup
+│   │   ├── file_classifier.py             # Path heuristics + language_registry.json role lookup
 │   │   ├── content_processor.py            # Chunked file content reader (~3200 chars/chunk)
 │   │   ├── language_loader.py              # LRU-cached pure reader over language_registry.json
 │   │   ├── extractor.py                    # Standalone ECA orchestrator (builds ECAOutput)
@@ -290,27 +348,46 @@ Analyst-Agent/
 │   │   ├── document_generator.py           # Markdown → .docx via python-docx
 │   │   └── config/
 │   │       └── archetype_registry.json     # ★ Single source of truth for product archetypes
+│   ├── skills/                             # ★ Dynamic Skill Pack Engine
+│   │   ├── skill_loader.py                 # SKILL.md YAML frontmatter parser
+│   │   ├── skill_matcher.py                # Max-of-dimensions scoring against RepoEvidenceManifest
+│   │   ├── skill_executor.py               # Subprocess runner per activated pack
+│   │   ├── skill_composer.py               # LLM auto-generation of novel skill packs
+│   │   └── packs/
+│   │       ├── web_api/                    # REST/gRPC API analysis
+│   │       ├── ml_pipeline/                # ML model & training pipeline analysis
+│   │       ├── data_platform/              # Data pipeline & warehouse analysis
+│   │       ├── mobile_app/                 # Android/iOS screen & permission analysis
+│   │       ├── cli_tool/                   # CLI framework instructions (no scripts)
+│   │       └── _generated/                 # Auto-generated packs (reusable)
 │   ├── utils/
-│   │   ├── llm_client.py                   # OpenAI wrapper (retry, JSON mode, temperature=0)
-│   │   └── llm_enrichment.py               # 5 enrichment functions + hallucination pruning
+│   │   ├── llm_client.py                   # OpenAI wrapper (retry, JSON mode, temperature=0, o-series/GPT-5 support)
+│   │   └── llm_enrichment.py              # 5 enrichment functions + hallucination pruning
 │   ├── output/
 │   │   └── final_output_builder.py         # Merges Phase 1 outputs into canonical payload
 │   ├── schemas/
 │   │   └── models.py                       # ★ All Pydantic models and data contracts
 │   ├── validation/                         # Validation utilities
 │   └── tests/                              # pytest test suite
+│       ├── test_brd_grounding.py
+│       ├── test_entity_extractor.py
+│       ├── test_llm_client.py
+│       └── test_pipeline.py
 ├── architecture/
 │   ├── pipeline_sop.md                     # Pipeline Standard Operating Procedure
 │   ├── technical_overview.md               # Technical architecture overview
 │   └── BRD.md                              # Sample generated BRD for reference
 ├── runtime/
 │   └── pipeline_out/                       # All generated BRD artifacts (.md, .docx)
-│       └── runner_<repo_name>/             # Isolated clone directory per run
+│       └── <repo_name>/                    # Isolated per-repo directory
+│           ├── brd/                        # Final BRD output
+│           ├── debug/                      # Intermediate JSON dumps
+│           └── repo/src/                   # Cloned source code
 ├── static/
-│   └── index.html                          # Frontend UI
+│   └── index.html                          # Frontend UI (Tailwind CSS dark-mode)
 ├── .env.example                            # Environment variable template
 ├── .env                                    # Local secrets (gitignored)
-├── requirements.txt
+├── requirements.txt                        # Python dependencies
 ├── Agents.md                               # Multi-agent collaboration guide
 ├── Architecture.md                         # Full technical architecture document
 └── README.md                               # This file — setup and usage guide
@@ -338,6 +415,34 @@ Analyst-Agent/
 }
 ```
 
+### RepoEvidence Schema
+```json
+{
+  "has_http_api": "bool",
+  "has_grpc": "bool",
+  "has_database": "bool",
+  "has_auth": "bool",
+  "has_docker": "bool",
+  "has_kubernetes": "bool",
+  "has_android": "bool",
+  "has_ios": "bool",
+  "has_desktop": "bool",
+  "has_gdpr_mention": "bool",
+  "has_tests": "bool",
+  "platform": "string",
+  "build_tool": "string",
+  "primary_language": "string",
+  "dep_categories": {
+    "database": ["string"],
+    "auth": ["string"],
+    "grpc": ["string"],
+    "infra": ["string"],
+    "framework": ["string"],
+    "other": ["string"]
+  }
+}
+```
+
 ### Normalized Context Schema
 ```json
 {
@@ -357,10 +462,12 @@ Analyst-Agent/
 |---|---|
 | No `OPENAI_API_KEY` | Pipeline runs fully deterministically. LLM steps silently skipped. |
 | LLM API Error | Individual enrichment calls fall back to deterministic output. Pipeline never blocks. |
-| Missing `README` in target repo | System infers purpose from code structure and file signals. |
+| Missing `README` in target repo | System infers purpose from code structure and file signals via priority waterfall. |
 | BRD score < 0.85 | `BRDFixLoop` applies up to 2 deterministic repair passes (Self-Annealing). |
 | RepoScanner failure | Raises `RuntimeError` immediately with the scanner's error message. |
 | Unknown file extension | `language_loader.py` returns `"unknown"` role; file is still processed as plain text. |
+| No skill pack matches | If LLM available, SkillComposer auto-generates one. Otherwise, skill stage skipped entirely. |
+| Skill script timeout/failure | Caught by executor; empty result returned; pipeline continues without augmentation. |
 
 ---
 
@@ -370,6 +477,28 @@ Analyst-Agent/
 2. **Data-First** — JSON Schemas are defined before code. All inter-stage outputs are Pydantic-validated.
 3. **No Hallucination** — LLM prompts supply full structured context. `temperature=0`. Outputs semantically pruned.
 4. **Absolute Traceability** — Every feature maps to evidence. Every FR maps to a validated feature. `BRDValidator` enforces this across 9 scoring dimensions.
-5. **Repository Isolation** — Each run clones into a unique `runner_<repo_name>/` directory. Successive runs never cross-contaminate.
+5. **Repository Isolation** — Each run clones into a unique per-repo directory. Successive runs never cross-contaminate.
 6. **Self-Annealing** — On error or low-quality BRD: Analyze → Patch → Test → Update architecture SOP.
-7. **Zero Hardcoded Language Facts** — All language, extension, and role knowledge lives in `language_registry.json`. Adding support for a new language requires only a JSON entry.
+7. **Zero Hardcoded Language Facts** — All 40+ languages live in `language_registry.json`. All 13 archetypes live in `archetype_registry.json`. Adding support requires only a JSON entry.
+8. **Evidence-Grounded Output** — `RepoEvidenceManifest` is assembled from actual file system inspection. BRD sections check evidence flags before writing platform/infra/compliance content.
+9. **Self-Growing Intelligence** — SkillComposer auto-generates new skill packs for novel repository types. Generated packs are idempotent and promotable to stable packs.
+
+---
+
+## Testing
+
+Tests are located in `app/tests/`. Run tests with:
+
+```bash
+pytest app/tests/ -v
+```
+
+Test files:
+- `test_pipeline.py` — End-to-end pipeline integration tests
+- `test_brd_grounding.py` — BRD evidence grounding validation
+- `test_entity_extractor.py` — Entity extraction unit tests
+- `test_llm_client.py` — LLM client wrapper tests
+
+---
+
+*Last updated: 2026-05-28*
