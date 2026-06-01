@@ -1,7 +1,7 @@
 # Architecture — Analyst Agent
 
-> **Last updated:** 2026-05-28  
-> **Version:** 2.3 — Dynamic Skill Pack system + 9-dimension BRD validator + GPT-5/o-series support
+> **Last updated:** 2026-05-30  
+> **Version:** 2.4 — Hybrid Language Registry (Stage 1.2 UnknownLanguageResolver) + Dynamic Skill Pack system + 9-dimension BRD validator + GPT-5/o-series support
 
 ---
 
@@ -88,6 +88,13 @@ GitHub Repo URL
 │  [2] FileClassifier                                                 │
 │       Path heuristics + language_registry.json role lookup         │
 │       Output: {classified_files[{path, category, confidence}]}     │
+│       │                                                             │
+│  [1.2] UnknownLanguageResolver  (LLM, non-blocking, optional)      │
+│       Collect unknown exts → check _llm_inferred cache            │
+│       → batched LLM call → confidence gate ≥ 0.7                  │
+│       → write to language_registry.json → _llm_inferred            │
+│       → reload_registry() for same-run benefit                     │
+│       Output: updated _llm_inferred block (side-effect)            │
 │       │                                                             │
 │  [3] ContentProcessor                                               │
 │       Line-by-line read, chunk at ~3200 chars, UUID chunk_ids      │
@@ -354,8 +361,9 @@ POST /analyze-and-convert  {"repo_url": "https://github.com/owner/repo"}
 |--------|----------|-------|--------|
 | `repo_scanner.py` | `scan_repository(repo_url, dest_dir, skip_clone)` | GitHub URL + dest path | `{repo_name, root_path, files[]}` |
 | `file_classifier.py` | `run_classifier(scan_output)` | scan output | `{classified_files[{path, category, confidence}]}` |
+| `unknown_language_resolver.py` | `resolve_unknown_languages(classified_data, repo_dir)` | classified data + repo path | writes to `_llm_inferred`; calls `reload_registry()` |
 | `content_processor.py` | `run_content_processor(classified_data, repo_dir)` | classified files + repo path | `{chunks[{chunk_id, file_path, category, content}]}` |
-| `language_loader.py` | `get_role(ext)`, `get_language(ext)`, `is_binary(ext)`, `is_entry_point(filename)` | file extension / name | role string / bool |
+| `language_loader.py` | `get_role(ext)`, `get_language(ext)`, `is_binary(ext)`, `is_entry_point(filename)`, `reload_registry()` | file extension / name | role string / bool |
 | `extractor.py` | `extract_eca(repo_path)` | repo path | `ECAOutput` Pydantic model |
 | `api_extractor.py` | `extract_api_endpoints(repo_dir)` | repo path | `{endpoints[], grpc_rpcs[]}` |
 | `entity_extractor.py` | `extract_entities(repo_dir)` | repo path | `{entities[{name, source_file, table_name, fields[], entity_type}]}` |
@@ -787,6 +795,18 @@ All LLM calls route through `app/utils/llm_client.py`. The pipeline **never bloc
 ### 8.2 LLM Call Map
 
 ```
+Phase 1.2 — UnknownLanguageResolver  (LLM, optional, non-blocking)
+  resolve_unknown_languages(classified_data, repo_dir)
+    ├── Collects unique extensions from classified_data["unknown"]
+    ├── Filters out extensions already in _llm_inferred (cache hit → zero LLM call)
+    ├── Extracts first 800 chars of a representative file per extension
+    └── llm_json_call(LANG_RESOLVE_SYSTEM_PROMPT, batched_extension_snippets)
+        Accept: confidence ≥ 0.7 + valid role
+        Reject: confidence < 0.7, "unknown" language name, invalid role
+        Side-effect: atomic write to language_registry.json → _llm_inferred
+        Side-effect: reload_registry() → LRU cache invalidated
+        Fallback: any exception → log warning, pipeline continues unchanged
+
 Phase 2 — Feature Extraction
   FeatureExtractionAgent.extract_features()
     └── llm_json_call(DYNAMIC_EXTRACTION_PROMPT, repo_context_str)
@@ -848,6 +868,7 @@ Phase 1.5 — Skill Composer  (optional, fires only when no pack matches)
 4. **Semantic pruning** — `prune_hallucinated_features()` cross-checks extracted features against the README as ground truth
 5. **BRD Validator dimension 3** — "No-Hallucination" checks that no FR-IDs appear in the BRD that weren't in the input set
 6. **BRD Validator dimension 9** — "Tech Grounding" checks that tech claims in the BRD are backed by `RepoEvidenceManifest`
+7. **Stage 1.2 language guardrails** — UnknownLanguageResolver uses a bounded candidate list, requires evidence citation, gates on confidence ≥ 0.7, and enforces curated-wins so `_llm_inferred` can never overwrite a hand-curated entry
 
 ---
 
@@ -926,6 +947,15 @@ OPENAI_VERBOSITY=low              # GPT-5 verbosity
 
 Single source of truth for all language knowledge. **Zero Python changes required** to add a new language.
 
+**Two-Tier Structure (v1.1):**
+
+| Block | Author | Priority | Notes |
+|---|---|---|---|
+| `"languages"` | Human-curated | **Highest** — always wins on collision | Committed to source control |
+| `"_llm_inferred"` | Stage 1.2 (UnknownLanguageResolver) | Lower — fills gaps only | Auto-written at runtime; never edit manually |
+
+> **Promotion rule:** After verifying an `_llm_inferred` entry is correct, copy it to the `"languages"` block, remove the LLM metadata fields (`confidence`, `evidence`, `inferred_at`, `promoted`), and delete it from `_llm_inferred`.
+
 ```json
 {
   "ignore_dirs": ["node_modules", ".git", "dist", ...],
@@ -940,6 +970,20 @@ Single source of truth for all language knowledge. **Zero Python changes require
       "build_files": ["requirements.txt", "pyproject.toml", ...],
       "binary": false,
       "notes": "CPython, PyPy"
+    }
+  },
+  "_llm_inferred": {
+    "_comment": "Auto-populated by UnknownLanguageResolver (Stage 1.2). DO NOT edit manually.",
+    "customdsl": {
+      "extensions": [".abcml"],
+      "role": "backend",
+      "entry_points": [],
+      "build_files": [],
+      "binary": false,
+      "confidence": 0.85,
+      "evidence": "PROGRAM DIVISION keyword",
+      "inferred_at": "2026-05-30",
+      "promoted": false
     }
   }
 }
@@ -986,7 +1030,9 @@ LLM call attempted
 
 | Scenario | Behavior |
 |----------|----------|
-| No `OPENAI_API_KEY` | All LLM phases silently skipped. Deterministic output used throughout. |
+| No `OPENAI_API_KEY` | All LLM phases silently skipped — including Stage 1.2. Deterministic output used throughout. |
+| Stage 1.2 failure (any exception) | Caught, warning logged, pipeline continues. File stays `"unknown"`. |
+| Unknown ext already in `_llm_inferred` | Static lookup — zero LLM calls on repeat runs. |
 | LLM feature extraction fails | `_fallback_extraction()` — module names become generic features |
 | LLM archetype detection fails | `_detect_archetype()` keyword voting via `archetype_registry.json` |
 | LLM FR generation fails | `_generate_deterministic_requirements()` generic SHALL-style FRs |
@@ -995,7 +1041,8 @@ LLM call attempted
 | RepoScanner clone failure | Returns `{"error": "..."}`, `run_end_to_end()` raises `RuntimeError` |
 | Missing README | `RepoContextBuilder` waterfall falls through to `[NO_DOCUMENTATION]` signal |
 | Binary / unreadable file | `is_binary()` check in scanner; `UnicodeDecodeError` silently skipped in `ContentProcessor` |
-| Unknown file extension | `language_loader.py` returns `"unknown"` role; file still processed as plain text |
+| Unknown file extension (no LLM key) | `language_loader.py` returns `"unknown"` role; file still processed as plain text |
+| Unknown file extension (LLM key set) | Stage 1.2 attempts resolution; accepted result written to `_llm_inferred`; rejected result stays `"unknown"` |
 | API endpoint exception | `try/except` in all route handlers → `HTTPException(500, detail=str(e))` + `traceback.print_exc()` |
 | No skill pack matches + no LLM key | Skill stage entirely skipped, pipeline continues without augmentation |
 | Skill script subprocess timeout | Caught by executor; empty result returned; pack contributes nothing |
@@ -1030,12 +1077,13 @@ LLM call attempted
 | 4 | **Absolute Traceability** | Every feature maps to `source_modules[]` evidence. Every FR maps to a `linked_feature`. BRDValidator enforces this across 9 scoring dimensions. |
 | 5 | **Repository Isolation** | Each run clones into `<repo_name>/repo/src/`. Successive runs never cross-contaminate. |
 | 6 | **Self-Annealing** | BRD score < 0.85 → `BRDFixLoop` applies deterministic patches → re-validates. Max 2 iterations. |
-| 7 | **Zero Hardcoded Language Facts** | All 40+ languages live in `language_registry.json`. All 13 archetypes live in `archetype_registry.json`. Adding support requires only a JSON entry. |
+| 7 | **Zero Hardcoded Language Facts** | All 40+ curated languages live in `language_registry.json → languages`. LLM-inferred languages live in `_llm_inferred`. Adding a known language requires only a JSON edit. Unknown languages are resolved and cached automatically by Stage 1.2 at runtime. |
 | 8 | **Evidence-Grounded Output** | `RepoEvidenceManifest` is assembled from actual file system inspection (not keyword guessing). BRD sections check evidence flags before writing platform/infra/compliance content. |
 | 9 | **Dual-Audience Writing** | `brd_enrichment_agent.py` prompts enforce plain English for business stakeholders + technical notes for engineers in every enriched section. |
 | 10 | **Batched LLM Calls** | FR enrichment processes 8 FRs per call to avoid token-limit failures on large repositories. |
 | 11 | **Zero Hardcoded Domain Logic** | All skill pack detection signals live in SKILL.md YAML frontmatter. Adding or removing domains never requires Python changes. |
-| 12 | **Self-Growing Intelligence** | SkillComposer auto-generates new skill packs for novel repository types. Generated packs are idempotent (fingerprinted) and promotable to stable packs. |
+| 12 | **Self-Growing Intelligence** | SkillComposer auto-generates new skill packs for novel repository types. UnknownLanguageResolver auto-populates `_llm_inferred` for novel file extensions. Both are idempotent and promotable to stable curated entries. |
+| 13 | **Curated-Wins Rule** | The `"languages"` block in `language_registry.json` always takes precedence over `"_llm_inferred"` on extension collision. Human-curated data can never be silently overwritten by LLM output. |
 
 ---
 
@@ -1052,8 +1100,9 @@ Analyst-Agent/
 │   ├── eca/                                # Stage 1: Extract, Classify, Aggregate
 │   │   ├── repo_scanner.py                 # git clone + os.walk file scan
 │   │   ├── file_classifier.py             # Path heuristics + registry role lookup
+│   │   ├── unknown_language_resolver.py   # ★ Stage 1.2 — LLM Learn & Cache for unknown extensions
 │   │   ├── content_processor.py            # Chunked file content reader (~3200 chars/chunk)
-│   │   ├── language_loader.py              # LRU-cached pure reader over language_registry.json
+│   │   ├── language_loader.py              # Two-tier LRU-cached reader: languages + _llm_inferred
 │   │   ├── extractor.py                    # Standalone ECA orchestrator (builds ECAOutput)
 │   │   ├── api_extractor.py                # Spring MVC annotations + .proto gRPC RPC parser
 │   │   ├── entity_extractor.py             # @Entity JPA, Kotlin data class, proto message
@@ -1062,7 +1111,7 @@ Analyst-Agent/
 │   │   ├── repo_context_builder.py         # Priority waterfall → RepoContext dict
 │   │   ├── evidence_manifest.py            # RepoEvidenceManifest from file system + extractors
 │   │   └── config/
-│   │       └── language_registry.json      # ★ Single source of truth for all language knowledge
+│   │       └── language_registry.json      # ★ Single source of truth v1.1: languages + _llm_inferred
 │   │
 │   ├── context/                            # Stage 2: Context Intelligence
 │   │   ├── aggregator.py                   # Chunks → modules by top-level directory
@@ -1117,7 +1166,8 @@ Analyst-Agent/
 │       ├── test_brd_grounding.py
 │       ├── test_entity_extractor.py
 │       ├── test_llm_client.py
-│       └── test_pipeline.py
+│       ├── test_pipeline.py
+│       └── test_unknown_language_resolver.py  # Stage 1.2 unit tests
 │
 ├── architecture/
 │   ├── pipeline_sop.md                     # Pipeline Standard Operating Procedure
@@ -1149,7 +1199,13 @@ Analyst-Agent/
 ## Quick Reference
 
 ### Adding a New Language
-Edit `app/eca/config/language_registry.json`. No Python changes required.
+Edit `app/eca/config/language_registry.json → "languages"` block. No Python changes required.
+
+### Promoting an LLM-Inferred Language
+1. Find the entry under `"_llm_inferred"` in `language_registry.json`
+2. Copy it to `"languages"`, remove LLM metadata fields (`confidence`, `evidence`, `inferred_at`, `promoted`)
+3. Delete the entry from `"_llm_inferred"`
+4. `language_loader.py` auto-reads the updated registry on next run
 
 ### Adding a New Product Archetype
 Edit `app/analysis/config/archetype_registry.json`. No Python changes required.
@@ -1165,13 +1221,16 @@ Or let `SkillComposer` auto-generate one on first encounter of a novel repo type
 
 | Task | File to Modify |
 |------|---------------|
-| Add new language support | `app/eca/config/language_registry.json` |
+| Add new language support | `app/eca/config/language_registry.json → "languages"` |
+| Promote LLM-inferred language | Move entry from `"_llm_inferred"` to `"languages"` in `language_registry.json` |
 | Add new product archetype | `app/analysis/config/archetype_registry.json` |
 | Add new skill pack | `app/skills/packs/<domain>/SKILL.md` |
 | Modify skill scoring | `app/skills/skill_matcher.py` |
 | Modify skill execution | `app/skills/skill_executor.py` |
 | Add new analysis agent | `app/analysis/<agent_name>.py` |
 | Add new file extractor | `app/eca/<extractor_name>.py` |
+| Modify language resolution logic | `app/eca/unknown_language_resolver.py` |
+| Modify two-tier registry lookup | `app/eca/language_loader.py` |
 | Modify BRD structure | `app/analysis/brd_composer.py` |
 | Modify validation rules | `app/analysis/brd_validator.py` |
 | Add new API endpoint | `app/api/main.py` |
@@ -1193,4 +1252,4 @@ python -m app.output.final_output_builder --scan ... --classified ... --chunks .
 
 ---
 
-*Last updated: 2026-05-28*
+*Last updated: 2026-05-30*

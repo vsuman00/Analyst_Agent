@@ -27,6 +27,7 @@ This document explains how multiple agents can collaborate on developing and ext
 GitHub Repo URL
     → [1] RepoScanner         — clone & file tree
     → [2] FileClassifier      — categorize source files (driven by language_registry.json)
+    → [1.2] UnknownLanguageResolver — LLM Learn & Cache for unknown extensions (non-blocking)
     → [3] ContentProcessor    — chunk & extract content
     → [3.1] Sub-Extractors    — API, Entity, Dependency, Defect signal extraction
     → [3.5] RepoContextBuilder — priority waterfall intent signals
@@ -76,8 +77,9 @@ Analyst-Agent/
 │   ├── eca/                                # Stage 1: Extract, Classify, Aggregate
 │   │   ├── repo_scanner.py                 # git clone + os.walk file scan
 │   │   ├── file_classifier.py             # Path heuristics + language_registry.json role lookup
+│   │   ├── unknown_language_resolver.py   # ★ Stage 1.2 — LLM Learn & Cache for unknown extensions
 │   │   ├── content_processor.py            # Chunked file content reader (~3200 chars/chunk)
-│   │   ├── language_loader.py              # LRU-cached pure reader over language_registry.json
+│   │   ├── language_loader.py              # Two-tier LRU-cached reader: languages + _llm_inferred
 │   │   ├── extractor.py                    # Standalone ECA orchestrator (builds ECAOutput)
 │   │   ├── api_extractor.py                # Spring MVC annotations + .proto gRPC RPC parser
 │   │   ├── entity_extractor.py             # @Entity JPA, Kotlin data class, proto message parser
@@ -86,7 +88,7 @@ Analyst-Agent/
 │   │   ├── repo_context_builder.py         # Priority waterfall → RepoContext dict
 │   │   ├── evidence_manifest.py            # RepoEvidenceManifest from file system + extractors
 │   │   └── config/
-│   │       └── language_registry.json      # ★ Single source of truth for all language knowledge
+│   │       └── language_registry.json      # ★ Single source of truth v1.1: languages + _llm_inferred
 │   ├── context/                            # Stage 2: Context Intelligence
 │   │   ├── aggregator.py                   # Chunks → modules by top-level directory
 │   │   ├── normalizer.py                   # snake_case, dedup, noise removal, UUID5 IDs
@@ -321,9 +323,9 @@ def extract_graphql_signals(content: str, file_path: str) -> List[Dict[str, Any]
 
 ### Pattern 3: Extending the Language Registry
 
-To add support for a new programming language:
+To add support for a **new known language**:
 
-1. Edit [app/eca/config/language_registry.json](app/eca/config/language_registry.json):
+1. Edit [app/eca/config/language_registry.json](app/eca/config/language_registry.json) under the `"languages"` block:
 ```json
 "rust": {
   "extensions": [".rs"],
@@ -336,6 +338,15 @@ To add support for a new programming language:
 ```
 
 2. No Python changes required — `language_loader.py` auto-reads the registry.
+
+**Two-Tier Registry (v1.1):**
+
+| Block | Purpose | Priority |
+|---|---|---|
+| `"languages"` | Human-curated entries — committed to source control | Highest — always wins on collision |
+| `"_llm_inferred"` | Auto-written by Stage 1.2 (UnknownLanguageResolver) at runtime | Lower — fills gaps only |
+
+> **Rule:** Never manually edit `_llm_inferred`. Review LLM-inferred entries and promote them to `"languages"` once verified (see Pattern 6).
 
 ### Pattern 4: Adding a New BRD Section
 
@@ -388,6 +399,43 @@ scripts:
 ```
 
 No registration code needed — `skill_loader.py` auto-discovers all packs on startup.
+
+---
+
+### Pattern 6: Promoting an LLM-Inferred Language to Curated
+
+When Stage 1.2 (UnknownLanguageResolver) resolves a new extension, it writes the result to `"_llm_inferred"` in `language_registry.json`. After verifying the entry is correct, promote it to the curated `"languages"` block:
+
+1. Open [app/eca/config/language_registry.json](app/eca/config/language_registry.json).
+2. Find the entry under `"_llm_inferred"` (e.g. `"customdsl"`).
+3. Copy it to the `"languages"` block. Clean up LLM-specific metadata fields (`confidence`, `evidence`, `inferred_at`, `promoted`).
+4. Delete the entry from `"_llm_inferred"`.
+5. `language_loader.py` auto-reads the updated registry on next run — no Python changes required.
+
+```json
+// Before (in _llm_inferred):
+"customdsl": {
+  "extensions": [".abcml"],
+  "role": "backend",
+  "entry_points": [],
+  "build_files": [],
+  "binary": false,
+  "confidence": 0.85,
+  "evidence": "PROGRAM DIVISION keyword",
+  "inferred_at": "2026-05-30",
+  "promoted": false
+}
+
+// After (moved to languages, metadata removed):
+"customdsl": {
+  "extensions": [".abcml"],
+  "role": "backend",
+  "entry_points": [],
+  "build_files": [],
+  "binary": false,
+  "notes": "CustomDSL — promoted from LLM inference on 2026-05-30"
+}
+```
 
 ---
 

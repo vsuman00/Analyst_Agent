@@ -1,6 +1,6 @@
 {
-  "_comment": "Language Registry v1.0 — Add any new language here. Zero Python changes required.",
-  "version": "1.0",
+  "_comment": "Language Registry v1.1 — Curated languages live in 'languages'. LLM-inferred entries are auto-written to '_llm_inferred'. Zero Python changes required to add a new language.",
+  "version": "1.1",
 
   "ignore_dirs": [
     "node_modules", ".git", "dist", "build", "__pycache__",
@@ -357,12 +357,12 @@
     },
 
     "matlab": {
-      "extensions": [".m"],
+      "extensions": [],
       "role": "backend",
       "entry_points": [],
       "build_files": [],
       "binary": false,
-      "notes": "MATLAB — Note: .m clashes with Objective-C; path context resolves ambiguity"
+      "notes": "MATLAB — .m extension conflicts with Objective-C and is intentionally omitted. MATLAB repos are detected via directory context (e.g. presence of .fig, .mat files) or README signals. Objective-C takes precedence for .m files."
     },
 
     "sql": {
@@ -472,5 +472,9 @@
       "binary": false,
       "notes": "Assembly language — low-level systems"
     }
+  },
+
+  "_llm_inferred": {
+    "_comment": "Auto-populated by UnknownLanguageResolver (Stage 1.2). DO NOT edit manually — review entries and promote to 'languages' block after verification. Curated 'languages' entries always take precedence on extension collision."
   }
 }

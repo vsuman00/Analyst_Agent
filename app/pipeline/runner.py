@@ -47,6 +47,8 @@ from app.eca.api_extractor import extract_api_endpoints
 from app.eca.dependency_extractor import extract_dependencies
 from app.eca.evidence_manifest import build_evidence_manifest
 from app.eca.entity_extractor import extract_entities
+from app.eca.unknown_language_resolver import resolve_unknown_languages   # Stage 1.2
+from app.eca.language_loader import list_all_languages, reload_registry
 from app.context.aggregator import aggregate_context
 from app.context.normalizer import normalize_context
 
@@ -233,6 +235,38 @@ def run_full_pipeline_service(repo_url: str, output_dir: str) -> dict:
     with open(_classified_debug_path, "w", encoding="utf-8") as _f:
         json.dump(classified_data, _f, indent=2, default=str)
     print(f"[DEBUG] classified_data saved → {_classified_debug_path}")
+
+    # ─── STAGE 1.2: UNKNOWN LANGUAGE RESOLVER (LLM-backed Learn & Cache) ──
+    # Resolves file extensions not found in the curated 'languages' block.
+    # Accepted inferences (confidence ≥ 0.7) are written to the '_llm_inferred'
+    # block of language_registry.json and cached permanently — the LLM is
+    # never called again for the same extension on future runs.
+    # Non-blocking: any failure falls through without affecting the pipeline.
+    log_stage("1.2", "UnknownLanguageResolver")
+    import os as _os
+    if _os.environ.get("OPENAI_API_KEY"):
+        try:
+            _newly_resolved = resolve_unknown_languages(
+                classified_data=classified_data,
+                dest_repo_dir=dest_repo_dir,
+                known_languages=list_all_languages(),
+            )
+            if _newly_resolved:
+                log_stage(
+                    "1.2", "UnknownLanguageResolver",
+                    f"SUCCESS — Learned & cached {len(_newly_resolved)} new "
+                    f"language(s): {list(_newly_resolved.keys())}"
+                )
+            else:
+                log_stage(
+                    "1.2", "UnknownLanguageResolver",
+                    "SUCCESS (All extensions already known — no LLM call needed)"
+                )
+        except Exception as _e:
+            print(f"[LANG RESOLVER] Stage 1.2 failed (non-blocking): {_e}")
+            log_stage("1.2", "UnknownLanguageResolver", f"SKIPPED ({_e})")
+    else:
+        log_stage("1.2", "UnknownLanguageResolver", "SKIPPED (No API Key)")
 
     log_stage("3", "ContentProcessor")
     chunks_data = run_content_processor(classified_data, dest_repo_dir)

@@ -7,6 +7,13 @@ lookup functions consumed by all other ECA tools.
 DESIGN RULE: All language knowledge lives in language_registry.json.
 This module is a pure data reader — it contains NO hardcoded language facts.
 
+Two-Tier Lookup Order (highest → lowest priority):
+  1. "languages"     block — human-curated, committed to source control
+  2. "_llm_inferred" block — auto-written by UnknownLanguageResolver (Stage 1.2)
+
+Curated entries ALWAYS win on extension collision.
+Both tiers are LRU-cached; reload_registry() clears both.
+
 Public API:
     get_role(extension)        → "backend" | "frontend" | "config" | "docs" | "unknown"
     get_language(extension)    → "python" | "cobol" | "powerbuilder" | ... | "unknown"
@@ -15,6 +22,8 @@ Public API:
     get_ignore_dirs()          → set of directory names to skip during os.walk
     get_build_file_names()     → set of known build file names (package.json, pom.xml …)
     describe(extension)        → full dict for the language owning this extension, or {}
+    list_all_languages()       → sorted list of all registered language names (both tiers)
+    reload_registry()          → force-clear all LRU caches (call after writing _llm_inferred)
 """
 
 from __future__ import annotations
@@ -47,14 +56,31 @@ def _build_ext_to_language() -> Dict[str, str]:
     """
     Build a flat map:  extension → language_name
     e.g. ".py" → "python", ".cbl" → "cobol", ".pbl" → "powerbuilder"
+
+    Reads both 'languages' (curated) and '_llm_inferred' (LLM-learned).
+    Curated entries take precedence on any extension collision — LLM
+    can never overwrite a human-authored registry entry.
     """
     reg = _load_registry()
     mapping: Dict[str, str] = {}
+
+    # 1. Curated languages — highest priority, committed to source control
     for lang_name, lang_def in reg.get("languages", {}).items():
         for ext in lang_def.get("extensions", []):
             ext_lower = ext.lower()
-            if ext_lower not in mapping:        # first-defined wins on collision
+            if ext_lower not in mapping:
                 mapping[ext_lower] = lang_name
+
+    # 2. LLM-inferred languages — lower priority, auto-written by Stage 1.2
+    #    Only fills gaps not covered by curated block.
+    for lang_name, lang_def in reg.get("_llm_inferred", {}).items():
+        if lang_name.startswith("_"):          # skip _comment and meta keys
+            continue
+        for ext in lang_def.get("extensions", []):
+            ext_lower = ext.lower()
+            if ext_lower not in mapping:       # never overwrite a curated entry
+                mapping[ext_lower] = lang_name
+
     return mapping
 
 
@@ -130,7 +156,7 @@ def get_role(extension: str) -> str:
       1. Universal config extensions  (yaml, toml, ini …)
       2. Universal doc extensions     (md, rst, txt …)
       3. Universal binary extensions  → "binary" (internal, callers should use is_binary())
-      4. Language-specific role from the registry
+      4. Language-specific role — checked in 'languages' first, then '_llm_inferred'
       5. "unknown" fallback
     """
     ext = extension.lower()
@@ -145,7 +171,12 @@ def get_role(extension: str) -> str:
     lang_name = _build_ext_to_language().get(ext)
     if lang_name:
         reg = _load_registry()
-        lang_def = reg["languages"].get(lang_name, {})
+        # Check curated block first, then _llm_inferred (curated always wins)
+        lang_def = (
+            reg["languages"].get(lang_name)
+            or reg.get("_llm_inferred", {}).get(lang_name)
+            or {}
+        )
         return lang_def.get("role", "unknown")
 
     return "unknown"
@@ -179,7 +210,7 @@ def get_build_file_names() -> Set[str]:
 def describe(extension: str) -> Dict[str, Any]:
     """
     Return the full language definition dict for the language that owns this extension.
-    Returns {} if the extension is not registered.
+    Returns {} if the extension is not registered in either tier.
 
     Example:
         describe(".swift") →
@@ -196,12 +227,24 @@ def describe(extension: str) -> Dict[str, Any]:
     if lang_name == "unknown":
         return {}
     reg = _load_registry()
-    return reg["languages"].get(lang_name, {})
+    # Check curated block first, then _llm_inferred
+    return (
+        reg["languages"].get(lang_name)
+        or reg.get("_llm_inferred", {}).get(lang_name)
+        or {}
+    )
 
 
 def list_all_languages() -> List[str]:
-    """Return a sorted list of all registered language names."""
-    return sorted(_load_registry().get("languages", {}).keys())
+    """
+    Return a sorted list of all registered language names from both tiers.
+    Includes curated 'languages' and LLM-inferred '_llm_inferred' entries.
+    Meta-keys (starting with '_') are excluded.
+    """
+    reg = _load_registry()
+    curated  = set(reg.get("languages", {}).keys())
+    inferred = {k for k in reg.get("_llm_inferred", {}).keys() if not k.startswith("_")}
+    return sorted(curated | inferred)
 
 
 def reload_registry() -> None:

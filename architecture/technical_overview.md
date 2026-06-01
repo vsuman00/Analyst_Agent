@@ -1,6 +1,6 @@
 # Analyst-Agent Technical Overview
 
-> **Last updated:** 2026-05-20
+> **Last updated:** 2026-05-30
 > **See also:** [Architecture.md](../Architecture.md) for full detailed reference.
 
 This document provides a concise overview of the Analyst-Agent's architecture, the deterministic data extraction pipeline, and the core functions of its components.
@@ -50,6 +50,7 @@ All three public functions in `app/pipeline/runner.py`:
 |-------|--------|--------|
 | **[1] RepoScanner** | `app/eca/repo_scanner.py` | `{repo_name, root_path, files[]}` |
 | **[2] FileClassifier** | `app/eca/file_classifier.py` | `{classified_files[{path, category, confidence}]}` |
+| **[1.2] UnknownLanguageResolver** *(LLM, optional)* | `app/eca/unknown_language_resolver.py` | Writes to `language_registry.json → _llm_inferred`; calls `reload_registry()` |
 | **[3] ContentProcessor** | `app/eca/content_processor.py` | `{chunks[{chunk_id, file_path, category, content}]}` |
 | **[3.5] RepoContextBuilder** | `app/eca/repo_context_builder.py` | `RepoContext` dict — README, tech_stack, key_snippets |
 | **[3.6] EvidenceManifest** | `app/eca/evidence_manifest.py` | `RepoEvidenceManifest` — has_docker, has_kubernetes, platform, etc. |
@@ -168,7 +169,16 @@ All product archetypes live in `app/analysis/config/archetype_registry.json`.
 
 **Zero Python changes required to add a new language or archetype** — edit the JSON file only.
 
-- **40+ languages registered:** Python, JavaScript, TypeScript, Java, Kotlin, Go, Rust, Swift, C#, and more.
+**Language Registry — Two-Tier Structure (v1.1):**
+
+| Block | Author | Priority | Purpose |
+|---|---|---|---|
+| `"languages"` | Human-curated | Highest | 40+ committed language definitions |
+| `"_llm_inferred"` | Stage 1.2 (UnknownLanguageResolver) | Lower | Auto-resolved at runtime; cached permanently |
+
+`language_loader.py` reads both blocks with LRU caching. Curated entries always win on extension collision. Call `reload_registry()` after writing `_llm_inferred` to invalidate the cache.
+
+- **40+ curated languages registered:** Python, JavaScript, TypeScript, Java, Kotlin, Go, Rust, Swift, C#, and more.
 - **13 archetypes registered:** api_backend_service, social_platform, data_platform, mobile_app, ml_ai_platform, and more.
 
 ---
@@ -177,10 +187,12 @@ All product archetypes live in `app/analysis/config/archetype_registry.json`.
 
 | Scenario | Behavior |
 |----------|----------|
-| No `OPENAI_API_KEY` | All LLM phases silently skipped. Full deterministic output. |
+| No `OPENAI_API_KEY` | All LLM phases silently skipped — including Stage 1.2. Full deterministic output. |
+| Stage 1.2 failure | Caught and logged; file stays `"unknown"`; pipeline continues. |
+| Unknown ext already in `_llm_inferred` | Static lookup — zero LLM calls on repeat runs. |
 | LLM call fails | `_safe_call()` returns `{}`. BRDComposer uses deterministic templates. |
 | RepoScanner failure | `RuntimeError` raised immediately. Pipeline stops. |
 | Missing README | `RepoContextBuilder` waterfall falls to `[NO_DOCUMENTATION]`. |
 | BRD score < 0.85 | `BRDFixLoop` applies up to 2 repair passes and re-validates. |
-| Unknown file extension | `language_loader.py` returns `"unknown"` role; file still processed. |
+| Unknown file extension | Stage 1.2 attempts LLM resolution. Accepted result cached in `_llm_inferred`. |
 | API endpoint exception | `HTTPException(500)` + `traceback.print_exc()`. |

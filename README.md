@@ -13,6 +13,7 @@ The pipeline uses a multi-layered, 10-stage state-machine architecture to ensure
 GitHub Repo URL
     → [1] RepoScanner         — clone & file tree
     → [2] FileClassifier      — categorize source files (driven by language_registry.json)
+    → [1.2] UnknownLanguageResolver — LLM-backed Learn & Cache for unknown extensions
     → [3] ContentProcessor    — chunk & extract content
     → [3.1] Sub-Extractors    — API, Entity, Dependency, Defect signal extraction
     → [3.5] RepoContextBuilder — priority waterfall intent signals
@@ -191,7 +192,42 @@ The `language_registry.json` is the **single source of truth** for all language 
 - Binary and ignored-directory skip lists
 - Known application entry-points and build-file names
 
-The `language_loader.py` module exposes a pure-read, LRU-cached API over the registry. **No language facts are hardcoded anywhere in the tool layer.**
+**Two-Tier Registry Structure (v1.1):**
+
+| Block | Who writes it | Priority |
+|---|---|---|
+| `"languages"` | Human-curated, committed to source control | **Highest** — always wins on collision |
+| `"_llm_inferred"` | Auto-written by Stage 1.2 at runtime | Lower — fills gaps only |
+
+The `language_loader.py` module exposes a pure-read, LRU-cached API over **both** blocks. **No language facts are hardcoded anywhere in the tool layer.**
+
+### Stage 1.2: UnknownLanguageResolver — Learn & Cache
+`app/eca/unknown_language_resolver.py` resolves file extensions not recognised by the static registry. It runs **between FileClassifier and ContentProcessor** in an entirely non-blocking way.
+
+**Algorithm:**
+1. Collect all `"unknown"` files from `classified_data` and deduplicate by extension.
+2. Check `_llm_inferred` block — skip extensions already cached (zero LLM calls on repeat runs).
+3. Extract the first **800 characters** of one representative file per extension.
+4. Send a single **batched LLM call** for all remaining unknowns.
+5. Accept results with `confidence ≥ 0.7`; reject everything below threshold.
+6. Write accepted entries to `language_registry.json → _llm_inferred`.
+7. Call `reload_registry()` so the **current run** benefits immediately.
+
+**Learn & Cache lifecycle:**
+```
+Run 1:  .abcml → unknown → LLM call → confidence 0.85
+         → written to _llm_inferred → reload_registry()
+         → ContentProcessor sees .abcml role as "backend"  ✅
+Run 2:  .abcml → _llm_inferred static hit → ZERO LLM calls  ✅
+```
+
+**Anti-hallucination guardrails:**
+- Bounded candidate list — LLM given all known language names to choose from
+- Evidence citation required — LLM must quote the exact token that identifies the language
+- Confidence threshold gate — results below 0.7 rejected
+- `temperature=0` enforced by `llm_client.py`
+- Curated-wins rule — `_llm_inferred` can never overwrite `languages` entries
+- Fails silently — no `OPENAI_API_KEY` → stage skipped; any exception → pipeline continues
 
 ### Stage 1.5: Context & Evidence
 - **RepoContextBuilder**: Priority waterfall (README → package.json → pyproject.toml → Cargo.toml → entry point docstring → `[NO_DOCUMENTATION]`).
@@ -315,8 +351,9 @@ Analyst-Agent/
 │   ├── eca/                                # Stage 1: Extract, Classify, Aggregate
 │   │   ├── repo_scanner.py                 # git clone + os.walk file scan
 │   │   ├── file_classifier.py             # Path heuristics + language_registry.json role lookup
+│   │   ├── unknown_language_resolver.py   # ★ Stage 1.2 — LLM Learn & Cache for unknown extensions
 │   │   ├── content_processor.py            # Chunked file content reader (~3200 chars/chunk)
-│   │   ├── language_loader.py              # LRU-cached pure reader over language_registry.json
+│   │   ├── language_loader.py              # Two-tier LRU-cached reader: languages + _llm_inferred
 │   │   ├── extractor.py                    # Standalone ECA orchestrator (builds ECAOutput)
 │   │   ├── api_extractor.py                # Spring MVC annotations + .proto gRPC RPC parser
 │   │   ├── entity_extractor.py             # @Entity JPA, Kotlin data class, proto message parser
@@ -325,7 +362,7 @@ Analyst-Agent/
 │   │   ├── repo_context_builder.py         # Priority waterfall → RepoContext dict
 │   │   ├── evidence_manifest.py            # RepoEvidenceManifest from file system + extractors
 │   │   └── config/
-│   │       └── language_registry.json      # ★ Single source of truth for all language knowledge
+│   │       └── language_registry.json      # ★ Single source of truth v1.1: languages + _llm_inferred
 │   ├── context/                            # Stage 2: Context Intelligence
 │   │   ├── aggregator.py                   # Chunks → modules by top-level directory
 │   │   ├── normalizer.py                   # snake_case, dedup, noise removal, UUID5 IDs
@@ -460,12 +497,13 @@ Analyst-Agent/
 
 | Scenario | Behavior |
 |---|---|
-| No `OPENAI_API_KEY` | Pipeline runs fully deterministically. LLM steps silently skipped. |
+| No `OPENAI_API_KEY` | Pipeline runs fully deterministically. LLM steps silently skipped — including Stage 1.2. |
 | LLM API Error | Individual enrichment calls fall back to deterministic output. Pipeline never blocks. |
 | Missing `README` in target repo | System infers purpose from code structure and file signals via priority waterfall. |
 | BRD score < 0.85 | `BRDFixLoop` applies up to 2 deterministic repair passes (Self-Annealing). |
 | RepoScanner failure | Raises `RuntimeError` immediately with the scanner's error message. |
-| Unknown file extension | `language_loader.py` returns `"unknown"` role; file is still processed as plain text. |
+| Unknown file extension | Stage 1.2 attempts LLM resolution (if API key present). Accepted results cached in `_llm_inferred`. Below-threshold results stay `"unknown"` and the file is still processed as plain text. |
+| Unknown extension already in `_llm_inferred` | Static lookup — zero LLM calls. Stage 1.2 is a no-op. |
 | No skill pack matches | If LLM available, SkillComposer auto-generates one. Otherwise, skill stage skipped entirely. |
 | Skill script timeout/failure | Caught by executor; empty result returned; pipeline continues without augmentation. |
 
@@ -479,9 +517,9 @@ Analyst-Agent/
 4. **Absolute Traceability** — Every feature maps to evidence. Every FR maps to a validated feature. `BRDValidator` enforces this across 9 scoring dimensions.
 5. **Repository Isolation** — Each run clones into a unique per-repo directory. Successive runs never cross-contaminate.
 6. **Self-Annealing** — On error or low-quality BRD: Analyze → Patch → Test → Update architecture SOP.
-7. **Zero Hardcoded Language Facts** — All 40+ languages live in `language_registry.json`. All 13 archetypes live in `archetype_registry.json`. Adding support requires only a JSON entry.
+7. **Zero Hardcoded Language Facts** — All 40+ curated languages live in `language_registry.json → languages`. All LLM-inferred languages live in `_llm_inferred`. Adding a known language requires only a JSON entry; unknown languages are resolved and cached automatically at runtime.
 8. **Evidence-Grounded Output** — `RepoEvidenceManifest` is assembled from actual file system inspection. BRD sections check evidence flags before writing platform/infra/compliance content.
-9. **Self-Growing Intelligence** — SkillComposer auto-generates new skill packs for novel repository types. Generated packs are idempotent and promotable to stable packs.
+9. **Self-Growing Intelligence** — SkillComposer auto-generates new skill packs for novel repository types. UnknownLanguageResolver auto-populates `_llm_inferred` for novel file extensions. Both are idempotent and promotable.
 
 ---
 
@@ -498,7 +536,8 @@ Test files:
 - `test_brd_grounding.py` — BRD evidence grounding validation
 - `test_entity_extractor.py` — Entity extraction unit tests
 - `test_llm_client.py` — LLM client wrapper tests
+- `test_unknown_language_resolver.py` — Stage 1.2 unit tests (confidence gate, cache hit, two-tier precedence, atomic write)
 
 ---
 
-*Last updated: 2026-05-28*
+*Last updated: 2026-05-30*
