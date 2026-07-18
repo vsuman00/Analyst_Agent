@@ -30,6 +30,8 @@ ENV/
 # Project Specific Artifacts
 runtime/
 outputs/
+graphify-out/
+app/graphify-out/
 .tmp/
 *.docx
 *.log
