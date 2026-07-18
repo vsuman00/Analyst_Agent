@@ -46,4 +46,5 @@ outputs/
 
 # OS
 .DS_Store
+._*
 Thumbs.db
